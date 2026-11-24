@@ -1,0 +1,13 @@
+/memora
+/dist/
+
+# 库文件与密钥：备份就是拷走 .db，但它绝不该进版本库
+*.db
+*.db-wal
+*.db-shm
+*.key
+*.crt
+
+# 真配置含口令哈希与模型 key，只提交 .example
+/etc/memora.env
+memora.env

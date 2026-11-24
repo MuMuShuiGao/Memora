@@ -1,0 +1,32 @@
+# ADR-0006：一个静态二进制 + systemd 起停，不进 Docker。
+# 装法：把编译产物放到 /usr/local/bin/memora，配置放到 /etc/memora/memora.env。
+
+[Unit]
+Description=memora 个人备忘录服务
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=memora
+Group=memora
+ExecStart=/usr/local/bin/memora serve -config /etc/memora/memora.env
+EnvironmentFile=/etc/memora/memora.env
+WorkingDirectory=/var/lib/memora
+
+Restart=on-failure
+RestartSec=2s
+
+# 非特权端口，不需要 AmbientCapabilities。下面这几条是白拿的收口。
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/memora
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+
+[Install]
+WantedBy=multi-user.target
