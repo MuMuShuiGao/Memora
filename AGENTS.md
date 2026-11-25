@@ -24,4 +24,55 @@
 | 写 `docs/projectneed.md` | 只写需求层。技术栈、表结构、接口契约、排期都不进——架构约束剥掉实现名翻译成产品语言 |
 | 任务结束、会话要断 | **无条件更新 `docs/NOW.md`**，含 `> 更新：` 时间 |
 
+## 提交规范（Conventional Commits，写死，不许自行简化）
+
+标题一律 `<type>(<scope>): <subject>`。type 与 scope 用小写英文，subject 用中文说清做了什么。
+
+| type | 什么时候用 |
+| --- | --- |
+| `feat` | 新增对外可见的功能 |
+| `fix` | 修 bug |
+| `docs` | 只动 `docs/` 或代码注释 |
+| `refactor` | 不改外部行为的结构调整 |
+| `perf` | 只为更快或更省 |
+| `test` | 只动测试 |
+| `build` | 构建系统、依赖、打包（`Makefile` / `go.mod` / `Gradle` / `deploy/`） |
+| `ci` | 持续集成配置 |
+| `chore` | 以上都不是 |
+| `revert` | 回滚某个提交 |
+
+- scope 取模块名：`api` `store` `auth` `config` `period` `report` `android` `docs`。跨多模块或纯仓库级就省略括号，写 `chore: ...`。
+- 标题 ≤ 50 字符，句末不加句号。禁止 `update`、`修改`、`临时`、`WIP`、`fix bug` 这类空词——写了等于没写。
+- 破坏性变更在 type 后加 `!`（`feat(api)!: ...`），并在正文末尾单独一行写 `BREAKING CHANGE: <改了什么、调用方怎么迁移>`。
+- 正文：标题空一行后写**为什么**，不复述 diff；每行 ≤ 72 字符。改的动机、非显然的取舍、踩过的坑在这里，不在代码注释里。
+- 正文最后一行必须是验证口径：`验证：make vet && make test 全过（实测）`。没验证就照实写 `验证：未编译（本机无 SDK）`——藏起来比写出来更糟。
+- footer 各占一行，可选：`ADR: 0010`（该提交依据的决策编号）、`Fixes: #12`、`Co-authored-by: 名字 <邮箱>`。
+
+例：
+
+```
+build(android): Gradle 与依赖仓库改走镜像优先
+
+需求方第一次 sync 报 SocketTimeoutException，是 services.gradle.org 连不通，
+不是工程问题。Gradle 本体指向腾讯云镜像，依赖库阿里云排在官方之前——找不到
+就落到下一个仓库，能直连官方的环境行为不变。
+
+验证：两边都取到过 AGP 8.7.3 / Kotlin 2.0.21 构件（实测）。
+```
+
+一个提交 = 一个能自证完整的改动：
+
+- 只 `git add <具体路径>`，不用 `git add -A` / `git add .`——公开仓库里误提交的代价由别人替你付。提交前跑一次 `git status` 看清进了什么。
+- 编译不过、测试不过、`TODO` 没交代，不提交。文档更新可以和代码同提交，但不许留到"以后一起补"。
+- 半成品不要提交，也不要在共享工作树里裸 `git stash`。
+
+历史卫生（硬规则）：
+
+- **已推送的提交不 amend、不 rebase、不 force push**。远端是需求方的公开仓库，这条已由需求方定死。
+- 拉取用 `git pull --rebase`，保持线性历史；rebase 只允许发生在本地未推送的提交上。
+- 不许 `--no-verify` 绕过钩子。钩子报错就修根因，不关掉它。
+- 不建空提交凑数，不把密钥、`.db`、`*.pem`、`.env` 提交进去——文件名看着人畜无害也要点开看一眼。
+
+适用范围：**从下一个提交起**。已有的 8 个提交（`Initial commit` … `a5b546c`）保持原样，不改写——把它们套上 type 前缀要重写全部历史并 force push 公开仓库。
+
 完整流程见 [`docs/WORKFLOW.md`](docs/WORKFLOW.md)，书写约束见 [`docs/writing-rules.md`](docs/writing-rules.md)。
