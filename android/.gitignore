@@ -3,6 +3,8 @@
 build/
 local.properties
 captures/
+# AS 打开工程就会生成这堆，里面是 IDE 状态而非工程事实；且 gradle.xml 记的是本机 JVM 选择。
+.idea/
 
 # 签名密钥不进仓库；发 Release 包时由使用者自备
 *.keystore

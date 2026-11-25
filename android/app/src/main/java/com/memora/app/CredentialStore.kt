@@ -16,22 +16,24 @@ class CredentialStore(context: Context) {
 
     private val prefs = context.getSharedPreferences("memora_credential", Context.MODE_PRIVATE)
 
-    fun passphrase(): String? = try {
-        val stored = prefs.getString(STORED_KEY, null)
-        if (stored == null) return null
-        val separator = stored.indexOf(':')
-        if (separator < 0) return null
-        val iv = Base64.decode(stored.substring(0, separator), Base64.NO_WRAP)
-        val cipherText = Base64.decode(stored.substring(separator + 1), Base64.NO_WRAP)
+    fun passphrase(): String? {
+        return try {
+            val stored = prefs.getString(STORED_KEY, null)
+            if (stored == null) return null
+            val separator = stored.indexOf(':')
+            if (separator < 0) return null
+            val iv = Base64.decode(stored.substring(0, separator), Base64.NO_WRAP)
+            val cipherText = Base64.decode(stored.substring(separator + 1), Base64.NO_WRAP)
 
-        val cipher = Cipher.getInstance(TRANSFORMATION)
-        cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
-        String(cipher.doFinal(cipherText), Charsets.UTF_8)
-    } catch (e: Exception) {
-        // 密钥可能因为系统侧的原因再也用不了（恢复出厂外的 keystore 重置、别名被清）。
-        // 密文留着也没有可读路径，清掉让界面回到连接页重输——比抛一个用户看不懂的错好。
-        prefs.edit().remove(STORED_KEY).apply()
-        null
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, secretKey(), GCMParameterSpec(TAG_BITS, iv))
+            String(cipher.doFinal(cipherText), Charsets.UTF_8)
+        } catch (e: Exception) {
+            // 密钥可能因为系统侧的原因再也用不了（恢复出厂外的 keystore 重置、别名被清）。
+            // 密文留着也没有可读路径，清掉让界面回到连接页重输——比抛一个用户看不懂的错好。
+            prefs.edit().remove(STORED_KEY).apply()
+            null
+        }
     }
 
     // 返回 false 表示这台设备存不住口令；调用方要告诉用户，而不是假装存好了。
