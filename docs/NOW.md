@@ -20,7 +20,7 @@
 
 - **不卡编码**，卡"上线"的是需求方侧两件事：把 key 写进服务端配置文件（**不要贴进对话**）、给业务端口加一条入方向安全组规则。原来第三件"在 Windows 上跑第一次编译"本轮已完成。
 - 测试回路已经定死在 Windows：`make windows` 出 `memora.exe`（已实测是 PE32+ x86-64）→ 本机起服务 → 模拟器经 `10.0.2.2:8443` 连它 → `local` flavor 装 APK。步骤写在 `android/README.md`。冒烟全程走回环，不需要安全组，所以 FR-01 目前只有"服务在 TLS 上应答正确"这一半证据。
-- **sync 那两个拦路石已解掉**（都在 Windows 实测过，细节写进 `android/README.md`）：Gradle 本体改走华为云镜像——腾讯云那版看着一样快但不能用，它对 curl 返回真 zip、对 Java 的 `HttpURLConnection` 返回 989 字节 JS 反爬页，wrapper 解包时报 `zip END header not found`；换的哈希与官方逐字节一致。AS 自带 JBR 25 超出 Gradle 8.11 上限（报错正文只有 `25.0.4` 一行），已把 JVM 指到本机已有的 JDK 17，两处都写了：`local.properties` 的 `java.home`（AS 下拉框读的就是这条）和用户级 `~/.gradle/gradle.properties` 的 `org.gradle.java.home`（命令行也管住，且会盖掉 IDE 的选择）。这台机器上没有 21，之前记的"得选 JVM 21"是记错了，17~23 都行；`JAVA_HOME` 还指着 JDK 8，别指望它。
+- **sync 那两个拦路石已解掉**（Windows 实测）：Gradle 本体改走华为云镜像，构建 JVM 定在本机已有的 JDK 17。方案与否决理由在 [ADR-0011](decisions/0011-build-mirror-and-gradle-jvm.md)，排障步骤在 `android/README.md`，这里不重述。纠正一条旧记录：之前写的"得选 JVM 21"是记错了，本机没有 21，17~23 都行。
 
 ## 下一步
 
@@ -43,7 +43,7 @@
 - 需求方选了"本地装 Android Studio 开发"（不在云机上装 Android 工具链编 APK，也不在 Windows 跑远程开发——AS 没有那个能力）。为了 clone 下来就能编 `localDebug`，仓库里放了一张**只含模拟器别名与回环地址**的测试证书（668 字节，私钥不在此列），`server` 那张照旧只被手拷。
 - 标识值扫过两遍：`docs/` 与 `android/` 里没有 IP、端口、账号、家目录、密钥；`server` flavor 的默认地址是空串，公网地址不进仓库也不进 APK；`*.pem` / `*.keystore` 已被 ignore。
 - **事后又扫了一遍全部历史**（仓库是公开的，推送已完成，所以这轮是审计不是事前检查）：全部提交里没有任何 IP、口令哈希真值、API key、证书、`.db`、邮箱、手机号、家目录——冒烟与单测全是合成数据。补堵了一处漏网的：ADR-0009 与 `scripts/smoke.sh` 原本写着云厂商与区域，现改成"云上主机/云厂商的安全组"。要说清：**改 HEAD 抹不掉历史**，厂商+区域仍能从 `12835de` 那批提交里翻出来；另外最新提交的 git 作者是这台机器的默认身份（账号名+厂商字样），修正它要 force push `main`——问过，需求方选择接受，见"待确认"。
-- 本轮（Windows 首次编译）改动：`gradle-wrapper.properties` 镜像由腾讯云换成华为云；`android/README.md` 的"sync 卡在下载"一节改写并新增"Gradle JDK 不能是 25"一节，顶部"还没编译过"那句换成实测结论；`CredentialStore.kt` 一处表达式体改块体；`android/.gitignore` 补 `.idea/`。JVM 那条落在仓库外的用户级 `~/.gradle/gradle.properties`，仓库内只写占位符、不写绝对路径。
+- 本轮（Windows 首次编译）：新建 [ADR-0011](decisions/0011-build-mirror-and-gradle-jvm.md) 记下镜像与 JVM 两条决定，`INDEX.md` 补一行；`gradle-wrapper.properties` 镜像换成华为云并删掉没起作用的 `networkTimeout`；`settings.gradle.kts` 删掉冗余的阿里云 `gradle-plugin` 仓库；`android/README.md` 顶部"还没编译过"换成实测结论、排障两节合成一节；`CredentialStore.kt` 一处表达式体改块体；`android/.gitignore` 补 `.idea/`。仓库内只写占位符不写绝对路径，JVM 那条实际落在仓库外的用户级 `~/.gradle/gradle.properties`。
 
 ## 待确认（会影响下一步的）
 

@@ -28,6 +28,7 @@
 | [decisions/0008-native-kotlin-client.md](decisions/0008-native-kotlin-client.md) | 生效中 | 原生 Kotlin + Compose 写列表、录入、报表查看三块界面，产物是自己装的 APK；不引跨端框架，也不走 PWA |
 | [decisions/0009-public-ip-selfsigned-https-access.md](decisions/0009-public-ip-selfsigned-https-access.md) | 生效中 | 服务端在公网 IP 上以自签证书提供 HTTPS，证书内置进 APK 做校验；安全组只放行这一个业务端口 |
 | [decisions/0010-minimal-android-deps.md](decisions/0010-minimal-android-deps.md) | 生效中 | 客户端只依赖 OkHttp + kotlinx.serialization，网络层手写；否掉 Retrofit、Ktor、DI 容器、第三方加密库 |
+| [decisions/0011-build-mirror-and-gradle-jvm.md](decisions/0011-build-mirror-and-gradle-jvm.md) | 生效中 | Gradle 本体从华为云镜像取、依赖库阿里云两个仓库排在官方前面；构建 JVM 固定为本机的 JDK 17，不用 AS 自带的 JBR 25 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
 | [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 两张表的字段与归属算法、九个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
 | [design/android-client.md](design/android-client.md) | 生效中 | 手机端界面划分、本地只存哪四样、九个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |

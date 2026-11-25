@@ -28,45 +28,24 @@
 资源名就是文件名。**没放证书是编译期失败，不是运行期失败**，这是有意的：
 装上一个连不上自己服务器的包，比编译不过难查得多。
 
-## sync 卡在下载
+## 第一次 sync 失败
 
-第一次 sync 要下两样东西：Gradle 本体（约 130M）和依赖库（几百 M）。境内网络下 `services.gradle.org`
-经常直接连接超时，报的是：
+两种失败模式，报错长得不一样，都好认。仓库里已经把该配的配上了，只有 JVM 那一条得你在机器上写。
 
-```
-Could not install Gradle distribution from 'https://services.gradle.org/distributions/gradle-8.11-bin.zip'
-Reason: java.net.SocketTimeoutException: Connect timed out
-```
+**`Could not install Gradle distribution ... Connect timed out`**——Gradle 本体下不动。官方地址会 307 跳到
+GitHub Releases，实测只有 60KB/s 量级，130 MiB 要跑半个多小时。仓库里已改走华为云镜像
+（`gradle/wrapper/gradle-wrapper.properties`），依赖库把阿里云排在官方仓库前面（`settings.gradle.kts`）；
+找不到就自动落到下一个仓库，所以在能直连官方的机器上行为不变，要换回去就把这两处的镜像行删掉。
+为什么不能换成腾讯云、换镜像站该怎么验，见 [ADR-0011](../docs/decisions/0011-build-mirror-and-gradle-jvm.md)。
 
-这不是工程坏了，也不是网络完全不通：官方地址会 307 跳到 GitHub Releases，实测（curl）只有 60KB/s 量级，
-130M 要跑半个多小时，wrapper 等不到就超时。仓库里已经配好镜像：Gradle 本体走华为云
-（`gradle/wrapper/gradle-wrapper.properties`），依赖库把阿里云放在官方仓库前面兜底（`settings.gradle.kts`）。
-找不到就自动落到下一个仓库，所以在能直连官方的机器上行为不变；要换回官方地址就把那两个文件里的镜像行删掉。
+要是报的是 `zip END header not found`：`~/.gradle/wrapper/dists/` 下留着一个不是 zip 的坏文件，
+**改地址不会让它重新下载**，先把对应的哈希目录删掉再 sync。
 
-**别改成腾讯云镜像**，看着一样快但会坑一次：它对 curl 返回真 zip，对 Java 的 `HttpURLConnection`
-返回 989 字节的 JS 反爬页，而 wrapper 正是用后者下载的，于是报 `zip END header not found`，
-还在 `~/.gradle/wrapper/dists/` 下留一个坏文件，改回地址也不会重新下——要先把那个哈希目录删掉。
-华为云那个的 sha256 与官方逐字节一致（`57dafb5c…f1e9`），换镜像前都应该先比这个哈希。
-
-## Gradle JDK 不能是 25
-
-Android Studio Rabbit 2 自带的 JBR 是 25，Gradle 8.11 只支持到 23，sync 会失败，
-而且报错正文只有版本号一行：
-
-```
-* What went wrong:
-25.0.4
-```
-
-看到这行就是 JVM 太新，不是网络问题。两个地方都能指定，写哪个都行、写两个更好：
-
-- `local.properties` 里 `java.home=<JDK 路径>`——Android Studio 的 Gradle JDK 下拉框选的就是这一项
-  （`.idea/gradle.xml` 里那个 `#GRADLE_LOCAL_JAVA_HOME` 指的就是它），只管 IDE。
-- 用户级 `~/.gradle/gradle.properties` 里 `org.gradle.java.home=<JDK 路径>`——Gradle 自己认这条，
-  命令行构建也生效，而且会盖掉 IDE 选的 JVM。
-
-两处都不进仓库（`local.properties` 已被 ignore，用户级那份在仓库外），因为里面是绝对路径。
-只改 IDE 下拉框不够：命令行 `gradlew` 还是会用 `JAVA_HOME`，而这台机器的 `JAVA_HOME` 指向 JDK 8。
+**`* What went wrong:` 后面只有一行版本号，比如 `25.0.4`**——构建 JVM 太新，跟网络没关系。
+Android Studio Rabbit 2 自带 JBR 25，Gradle 8.11 只支持到 23。在**用户级** `~/.gradle/gradle.properties`
+里写一行 `org.gradle.java.home=<一个 17~23 的 JDK 路径>`。这条会盖掉 IDE 选的 Gradle JDK，命令行
+`gradlew` 也走它——实测过：启动时故意用 JBR 25，daemon 仍按这条起在 17，构建通过。不放项目级
+`gradle.properties` 是因为那要提交，而里面是绝对路径。
 
 ## 在 Windows 上跑模拟器
 
