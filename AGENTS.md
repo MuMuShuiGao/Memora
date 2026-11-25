@@ -32,7 +32,7 @@
 | --- | --- |
 | `feat` | 新增对外可见的功能 |
 | `fix` | 修 bug |
-| `docs` | 只动 `docs/` 或代码注释 |
+| `docs` | 只动文档（`docs/**`，含根目录 `AGENTS.md` / `README.md`）或代码注释，不改运行行为 |
 | `refactor` | 不改外部行为的结构调整 |
 | `perf` | 只为更快或更省 |
 | `test` | 只动测试 |
@@ -41,7 +41,7 @@
 | `chore` | 以上都不是 |
 | `revert` | 回滚某个提交 |
 
-- scope 取模块名：`api` `store` `auth` `config` `period` `report` `android` `docs`。跨多模块或纯仓库级就省略括号，写 `chore: ...`。
+- scope 取模块名：`api` `store` `auth` `config` `period` `report` `android` `docs`——其中 `docs` 作 scope 只指 `docs/` 里的内容，根目录文档不算。跨多模块或纯仓库级就省略括号，但省略的只是括号，type 仍照上表判，不等于自动落 `chore`。
 - 标题 ≤ 50 字符，句末不加句号。禁止 `update`、`修改`、`临时`、`WIP`、`fix bug` 这类空词——写了等于没写。
 - 破坏性变更在 type 后加 `!`（`feat(api)!: ...`），并在正文末尾单独一行写 `BREAKING CHANGE: <改了什么、调用方怎么迁移>`。
 - 正文：标题空一行后写**为什么**，不复述 diff；每行 ≤ 72 字符。改的动机、非显然的取舍、踩过的坑在这里，不在代码注释里。
