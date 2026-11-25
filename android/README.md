@@ -10,43 +10,59 @@
 
 `env` 维度下只有两个构建变体，差别就两样：默认地址，和打进包的那张证书。
 
-| 变体 | 默认地址 | 证书放哪 | 用途 |
+| 变体 | 默认地址 | 证书 | 用途 |
 | --- | --- | --- | --- |
-| `local` | `https://10.0.2.2:8443` | `app/src/local/res/raw/memora_server_cert.pem` | 模拟器连本机 `memora.exe` |
-| `server` | 空（必须手填） | `app/src/server/res/raw/memora_server_cert.pem` | 装到手机上连公网服务器 |
+| `local` | `https://10.0.2.2:8443` | **仓库里已有** `app/src/local/res/raw/memora_server_cert.pem` | 模拟器连本机 `memora.exe` |
+| `server` | 空（必须手填） | 要自己放 `app/src/server/res/raw/memora_server_cert.pem` | 装到手机上连公网服务器 |
 
 `server` 的默认地址是空串，公网 IP 既不进仓库也不进 APK。
+
+`local` 那张证书只覆盖模拟器别名与回环地址（`10.0.2.2`、`127.0.0.1`、`localhost`），不含任何机器标识，
+所以进仓库，换你 clone 下来就能编译；**对应私钥在这台云机上**（`/tmp` 下，不在仓库）。
+要换一张或重新签：`MEMORA_PUBLIC_IP=10.0.2.2,127.0.0.1,DNS:localhost ./deploy/mkcert.sh <临时目录>`，
+把产出的 `server.crt` 改名成 `memora_server_cert.pem` 覆盖进去，同时 Windows 上的服务端要改用新证书。
+
+`server` 那张仍然只能手拷——它的 SAN 是你服务器的实际地址，那个值不进仓库（writing-rules §9）。
 
 证书文件名必须是 `memora_server_cert.pem`——网络安全配置里写的是 `@raw/memora_server_cert`，
 资源名就是文件名。**没放证书是编译期失败，不是运行期失败**，这是有意的：
 装上一个连不上自己服务器的包，比编译不过难查得多。
 
-## 在 Windows 上跑模拟器（推荐先走这条）
+## 在 Windows 上跑模拟器
+
+只想先看它能不能编：clone → AS 打开 `android` 目录 → Build Variants 选 `localDebug` → Make Project。
+不需要服务端，也不需要拷任何文件（证书已在仓库里）。要真跑起来才往下走。
 
 1. 装 Android Studio（自带 SDK、模拟器、JDK）。
-2. 生成一张覆盖模拟器别名地址的证书。在这台云机上：
+2. 签一张覆盖模拟器别名地址的证书。用 Git for Windows 自带的 Git Bash 在这台机器上做就行，
+   私钥留在本机、不外传也不提交：
 
    ```bash
-   MEMORA_PUBLIC_IP=10.0.2.2,127.0.0.1 ./deploy/mkcert.sh ./tls-test
+   MEMORA_PUBLIC_IP=10.0.2.2,127.0.0.1,DNS:localhost ./deploy/mkcert.sh ./tls-test
    ```
 
    `10.0.2.2` 是模拟器看宿主机的固定地址，`127.0.0.1` 给宿主机自己用。
-3. 交叉编译出 Windows 版服务端（在这台云机上做，Windows 上不用装 Go）：
+   签完把 `tls-test/server.crt` 改名覆盖 `app/src/local/res/raw/memora_server_cert.pem`——
+   **这一步别提交**，仓库里那张对应的私钥在别处，配不上你本机这张。
+3. 交叉编译出 Windows 版服务端。本机装了 Go 就一条命令；没装就在云机上编好把 `memora.exe` 取过来
+   （12M 的独立可执行文件，不需要 Go 运行时）：
 
    ```bash
    make windows   # 或 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o memora.exe ./cmd/memora
    ```
 
-4. 把 `memora.exe`、`tls-test/server.crt`、`tls-test/server.key` 和一个 env 文件拷到 Windows，
+4. 把 `memora.exe`、`tls-test/server.crt`、`tls-test/server.key` 和一个 env 文件放到一起，
    env 里 `MEMORA_TLS_CERT` / `MEMORA_TLS_KEY` 指到那两个文件，`MEMORA_LISTEN_ADDR=0.0.0.0:8443`，
    然后 `memora.exe serve -config memora.env`。
 5. Windows 防火墙放行 8443 入站——不放行的话症状是"连不上服务器"，而不是证书报错。
-6. `server.crt` 改名成 `memora_server_cert.pem`，放进 `app/src/local/res/raw/`。
-7. Android Studio 里 Build Variants 选 `localDebug`，点运行。
+6. Android Studio 里 Build Variants 选 `localDebug`，点运行。
 
 改过证书就要重装 APK：网络安全配置里的证书是编译期打进包的。
 
 ## 装到手机上
+
+模拟器也可以直接连云机，不必先在 Windows 起服务端：选 `serverDebug`，连接页填云机地址即可——
+模拟器和真机都能出网，变的只是那张要打进包的证书。
 
 1. `MEMORA_PUBLIC_IP=<公网地址> ./deploy/mkcert.sh /etc/memora/tls`，SAN 里必须是手机实际连的那个地址。
 2. 那张 `server.crt` 改名进 `app/src/server/res/raw/memora_server_cert.pem`。

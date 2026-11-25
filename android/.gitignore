@@ -12,3 +12,8 @@ captures/
 # 而且它是每个环境各自生成的产物——所以只被拷进 res/raw/，不进版本库。
 *.pem
 *.der
+
+# 唯一的例外：local flavor 那张测试证书。SAN 只有模拟器别名与回环地址，
+# 不含任何机器标识；提交它换来"clone 完就能编译 localDebug"。
+# server 那张（SAN 是公网地址）永远不进仓库——私钥也从不离开签它的那台机器。
+!app/src/local/res/raw/memora_server_cert.pem
