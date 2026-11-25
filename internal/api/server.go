@@ -23,10 +23,12 @@ type Server struct {
 	gate *auth.Gate
 	gen  *report.Generator
 	log  *slog.Logger
+	// now 让接口测试能把"现在"钉住；生产用 time.Now。
+	now func() time.Time
 }
 
 func New(st *store.Store, cfg *config.Config, gate *auth.Gate, gen *report.Generator, log *slog.Logger) *Server {
-	return &Server{st: st, cfg: cfg, gate: gate, gen: gen, log: log}
+	return &Server{st: st, cfg: cfg, gate: gate, gen: gen, log: log, now: time.Now}
 }
 
 func (s *Server) Handler() http.Handler {
@@ -48,6 +50,7 @@ func (s *Server) Handler() http.Handler {
 		{"GET /v1/notes/{id}", s.getNote},
 		{"PATCH /v1/notes/{id}", s.updateNote},
 		{"DELETE /v1/notes/{id}", s.deleteNote},
+		{"GET /v1/periods/now", s.periodsNow},
 		{"GET /v1/reports", s.listReports},
 		{"GET /v1/reports/{kind}/{period_start}", s.getReport},
 		{"POST /v1/reports/{kind}/{period_start}/generate", s.generateReport},

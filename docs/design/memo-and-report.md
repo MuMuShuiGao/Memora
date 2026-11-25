@@ -1,8 +1,8 @@
 # 设计：记录与报表的数据、接口与传输
 
 > 状态：生效中
-> 摘要：两张表的字段与归属算法、七个接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 更新：2026-11-24 17:24
+> 摘要：两张表的字段与归属算法、九个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度
+> 更新：2026-11-24 18:55
 
 依据 [ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)。
 
@@ -84,6 +84,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `POST /v1/notes` | 新建 | 请求 `{body}`；响应含算好的 `week_start` |
 | `PATCH /v1/notes/{id}` | 修改 | 只接受 `{body}`；**不接受 `created_at`**，归属不动 |
 | `DELETE /v1/notes/{id}` | 删除 | 幂等，已删除返回 404 |
+| `GET /v1/periods/now` | 现在算哪个周期 | 返回 `week_start`/`week_end`/`month_start`/`month_end`（含端点）与 `now`、`local_tz`。存在的理由：归属算法只准有一处实现，客户端点"生成本周"要的 `period_start` 从这里拿，不在 Kotlin 里重算周一 |
 | `GET /v1/reports` | 报表列表 | `kind`、`limit`；返回含 `status` |
 | `GET /v1/reports/{kind}/{period_start}` | 取单份 | 未生成返回 404 + `code:"not_generated"` |
 | `POST /v1/reports/{kind}/{period_start}/generate` | 手动生成 | 同步返回结果；失败也要落 `status=failed` |
@@ -111,4 +112,4 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 ## 8. 本设计不包含
 
-备份机制（谁定期拷走库文件）——尚无结论，见 NOW 待确认。安卓端界面细节与包结构——等接口定了再单独写一份 `design/android-client.md`。
+备份机制（谁定期拷走库文件）——尚无结论，见 NOW 待确认。安卓端界面细节与包结构在 [android-client.md](android-client.md)（接口定完后已单独成篇）。

@@ -1,0 +1,14 @@
+# 构建产物与本机配置
+.gradle/
+build/
+local.properties
+captures/
+
+# 签名密钥不进仓库；发 Release 包时由使用者自备
+*.keystore
+*.jks
+
+# 证书公钥本身是公开的，但它的 SAN 里是这台机器的地址（writing-rules §9），
+# 而且它是每个环境各自生成的产物——所以只被拷进 res/raw/，不进版本库。
+*.pem
+*.der

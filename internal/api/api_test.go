@@ -44,6 +44,7 @@ func (s *stubCompleter) Complete(ctx context.Context, system, user string) (stri
 type harness struct {
 	st   *store.Store
 	llm  *stubCompleter
+	api  *Server
 	srv  *httptest.Server
 	loc  *time.Location
 	http *http.Client
@@ -81,10 +82,11 @@ func newHarness(t *testing.T) *harness {
 	}
 	gen.SetClock(func() time.Time { return clock })
 
-	srv := httptest.NewServer(New(st, cfg, gate, gen, slog.New(slog.NewTextHandler(io.Discard, nil))).Handler())
+	api := New(st, cfg, gate, gen, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	srv := httptest.NewServer(api.Handler())
 	t.Cleanup(srv.Close)
 
-	return &harness{st: st, llm: llm, srv: srv, loc: testTZ, http: srv.Client()}
+	return &harness{st: st, llm: llm, api: api, srv: srv, loc: testTZ, http: srv.Client()}
 }
 
 func (h *harness) do(t *testing.T, method, path, body string, withKey bool) (*http.Response, string) {
@@ -295,6 +297,65 @@ func TestGenerateFailurePersistsFailed(t *testing.T) {
 	}
 	if !strings.Contains(body, "模型说不能") {
 		t.Errorf("失败原因丢了: %s", body)
+	}
+}
+
+// 客户端要点"生成本周"就得交出 period_start。这条测试钉的是：接口给的那一套
+// 和服务端写记录时算的归属、和生成接口认的入参，三者必须是同一个答案。
+func TestPeriodsNowAgreesWithOwnership(t *testing.T) {
+	h := newHarness(t)
+	// 周三上午十点（UTC+8）：本周一 2026-11-23，本月 2026-11-01。
+	h.api.now = func() time.Time { return time.Date(2026, time.November, 25, 10, 0, 0, 0, testTZ) }
+
+	res, body := h.do(t, "GET", "/v1/periods/now", "", false)
+	if res.StatusCode != http.StatusUnauthorized {
+		t.Fatalf("不带口令 = %d %s, 期望 401", res.StatusCode, body)
+	}
+
+	res, body = h.do(t, "GET", "/v1/periods/now", "", true)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("带口令 = %d %s", res.StatusCode, body)
+	}
+	var p periodsResponse
+	if err := json.Unmarshal([]byte(body), &p); err != nil {
+		t.Fatalf("解析 %s: %v", body, err)
+	}
+	if p.WeekStart != "2026-11-23" || p.WeekEnd != "2026-11-29" {
+		t.Errorf("周区间 = %s 至 %s, 期望 2026-11-23 至 2026-11-29", p.WeekStart, p.WeekEnd)
+	}
+	if p.MonthStart != "2026-11-01" || p.MonthEnd != "2026-11-30" {
+		t.Errorf("月区间 = %s 至 %s, 期望 2026-11-01 至 2026-11-30", p.MonthStart, p.MonthEnd)
+	}
+	if p.LocalTZ != "UTC+8" {
+		t.Errorf("local_tz = %q, 期望配置里那个 UTC+8", p.LocalTZ)
+	}
+	if now, err := time.Parse(time.RFC3339, p.Now); err != nil {
+		t.Errorf("now 不是 RFC3339: %q (%v)", p.Now, err)
+	} else if !now.Equal(time.Date(2026, time.November, 25, 10, 0, 0, 0, testTZ)) {
+		t.Errorf("now = %v, 期望钉住的那个时刻", now)
+	}
+
+	// 同一个钟下新建的记录，归属必须跟接口说的一致。
+	res, body = h.do(t, "POST", "/v1/notes", `{"body":"先看接口给的周期"}`, true)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("新建 = %d %s", res.StatusCode, body)
+	}
+	var n store.Note
+	if err := json.Unmarshal([]byte(body), &n); err != nil {
+		t.Fatalf("解析记录: %v", err)
+	}
+	if n.WeekStart != p.WeekStart || n.MonthStart != p.MonthStart {
+		t.Errorf("记录归属 %s/%s 与接口 %s/%s 不一致",
+			n.WeekStart, n.MonthStart, p.WeekStart, p.MonthStart)
+	}
+
+	// 客户端拿它直接调生成，必须认。
+	res, body = h.do(t, "POST", "/v1/reports/week/"+p.WeekStart+"/generate", "", true)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("用接口给的 week_start 生成 = %d %s", res.StatusCode, body)
+	}
+	if !strings.Contains(body, `"status":"ready"`) {
+		t.Errorf("生成结果不是 ready: %s", body)
 	}
 }
 

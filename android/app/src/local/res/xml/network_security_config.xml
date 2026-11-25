@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 本机/模拟器环境：只信任 local flavor 打进包的那张自签证书（ADR-0009）。
+     没有系统锚点，也没有 debug-overrides——这份声明就是唯一的开关，代码里没有第二个。
+     memora_server_cert.pem 不进仓库，构建前把该环境的 server.crt 拷成它，见 android/README.md。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="@raw/memora_server_cert" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

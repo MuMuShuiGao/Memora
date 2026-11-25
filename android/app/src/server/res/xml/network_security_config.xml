@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 公网环境：只信任 server flavor 打进包的那张自签证书（SAN 是服务器公网地址）。
+     换证书必须重装 APK——这是 ADR-0009 明写的付出，客户端侧不做任何绕过。
+     memora_server_cert.pem 不进仓库，构建前把服务器上的 server.crt 拷成它，见 android/README.md。 -->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="false">
+        <trust-anchors>
+            <certificates src="@raw/memora_server_cert" />
+        </trust-anchors>
+    </base-config>
+</network-security-config>

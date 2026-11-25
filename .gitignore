@@ -1,4 +1,5 @@
 /memora
+/memora.exe
 /dist/
 
 # 库文件与密钥：备份就是拷走 .db，但它绝不该进版本库

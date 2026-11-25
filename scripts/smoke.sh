@@ -98,6 +98,7 @@ has "401 响应体不含业务数据" '"unauthorized"' "$(curl -sk "$BASE/v1/not
 check "错口令 = 401" 401 "$(code -H 'X-Access-Key: 故意错' "$BASE/v1/notes")"
 check "对口令 = 200" 200 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/notes")"
 check "报表接口同样要口令" 401 "$(code "$BASE/v1/reports")"
+check "周期接口同样要口令" 401 "$(code "$BASE/v1/periods/now")"
 
 say "记录读写与归属"
 TODAY=$(TZ=UTC-8 date +%F)   # 服务配的是 +08，这里换成同一套日历
@@ -113,6 +114,15 @@ assert week <= today < week + datetime.timedelta(days=7), "今天不在这个周
 EOF
 ok "归属周 = $WEEK（周一，含今天 $TODAY）"
 check "归属月 = 本月 1 号" "${TODAY%-*}-01" "$MONTH"
+
+# 客户端不许自己算周一：它要的生成的钥匙从这个接口拿。三条比对钉住
+# "接口给的"和"服务端写记录时算的"是同一个答案。
+PER=$(get "/v1/periods/now")
+check "接口给的周 = 刚写记录的归属周" "$WEEK" "$(printf '%s' "$PER" | jqp "['week_start']")"
+check "接口给的月 = 刚写记录的归属月" "$MONTH" "$(printf '%s' "$PER" | jqp "['month_start']")"
+check "接口给的周末日 = 该周 +6 天" \
+  "$(python3 -c "import datetime;print((datetime.date.fromisoformat('$WEEK')+datetime.timedelta(days=6)).isoformat())")" \
+  "$(printf '%s' "$PER" | jqp "['week_end']")"
 
 OUT=$(curl -sk -X PATCH -H "X-Access-Key: $KEY" -d '{"body":"给张三写半年总结"}' -w $'\n%{http_code}' "$BASE/v1/notes/$ID")
 check "修改 = 200" 200 "${OUT##*$'\n'}"

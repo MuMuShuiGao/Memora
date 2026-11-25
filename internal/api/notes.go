@@ -71,7 +71,9 @@ func (s *Server) createNote(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	now := time.Now()
+	// 用 s.now 而不是 time.Now：记录归属和 GET /v1/periods/now 必须来自同一个钟，
+	// 否则在跨周期的那一秒里，客户端刚记下的记录会跟接口给的周期对不上。
+	now := s.now()
 	created, err := s.st.CreateNote(r.Context(), body, now,
 		period.WeekStartID(now, s.cfg.LocalTZ),
 		period.MonthStartID(now, s.cfg.LocalTZ))
@@ -110,7 +112,7 @@ func (s *Server) updateNote(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// 归属两列不重算：改一条旧记录不该把它搬到当前周期去。
-	n, err := s.st.UpdateNote(r.Context(), id, body, time.Now())
+	n, err := s.st.UpdateNote(r.Context(), id, body, s.now())
 	if err != nil {
 		s.noteError(w, r, err)
 		return

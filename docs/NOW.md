@@ -2,45 +2,49 @@
 
 > 状态：生效中
 > 摘要：当前进度快照与断点，新会话从这里接上
-> 更新：2026-11-25 23:11
+> 更新：2026-11-26 00:04
 
 这份文件只描述**现在**。已完成的历史进 ADR 或对应设计文档，卡了两周以上的事项应该转成 ADR 或 refactor 方案，不要赖在这里。上限 60 行。
 
 ## 在做什么
 
-- **服务端已按 [design/memo-and-report.md](design/memo-and-report.md) 写完并可验收**：`cmd/memora`（`serve` / `hashpass` / `version`）+ 六块 internal（config / auth / store / period / report / api）。零 web 框架，标准库路由；直接依赖只有纯 Go 的 SQLite 驱动和 bcrypt，`CGO_ENABLED=0` 单二进制成立（ADR-0006 的前提没被打破）。
-- 三条验证腿**都是实测绿的**：`make vet`（go vet + gofmt 闸门）干净；`make test` 即 `go test -race ./...` 全过，**32 个测试**（period 7、store 2、report 14、api 9）；`make smoke` **66 项全过**——本机起 HTTPS 服务 + 假模型跑端到端，覆盖口令边界（FR-07）、归属算法、正文长度上限、报表生成与失败留痕（FR-05）、进行中周期出报（FR-06）、重启后自动补跑、限速 429。
-- 报表生成那条路径**没有真 key 参与过**：假模型只证明调用形状、重试次数、时刻语义（截止取读完记录那一刻、`generated_at` 取模型答完那一刻）都对，不证明 DeepSeek 的返回能用。
-- 还没做的：systemd 服务没装过（`deploy/memora.service` 只是文件），安卓端零代码。
-- **仓库已初始化并推上远端**：`main` 上是首个代码提交，坐在远端原有的 "Initial commit" 之上（快进，没强推）。远端是需求方的**公开** GitHub 仓库（账号与地址不入档，§9），本机凭据是那把仓库专用 deploy key（已放开写权限），私钥只在 `~/.ssh` 下、权限 600。要看地址跑 `git remote -v`。
+- **服务端写完并可验收**：`cmd/memora`（`serve` / `hashpass` / `version`）+ 六块 internal（config / auth / store / period / report / api）。零 web 框架；直接依赖只有纯 Go 的 SQLite 驱动和 bcrypt，`CGO_ENABLED=0` 单二进制成立（ADR-0006）。
+- 验证腿**都是实测绿的**：`make vet` 干净；`make test` 全过，**33 个测试**（period 7、store 2、report 14、api 10）；`make smoke` **70 项全过**——本机起 HTTPS + 假模型跑端到端，覆盖口令边界（FR-07）、归属算法、正文上限、报表生成与失败留痕（FR-05）、进行中周期出报（FR-06）、重启补跑、限速 429。
+- 本轮为安卓端补的两件事，都有实测：`GET /v1/periods/now`（周期只在服务端算一份，客户端不许再写一遍周一规则）；`deploy/mkcert.sh` 支持逗号分隔多地址 SAN（验过 `10.0.2.2 + 127.0.0.1 + localhost` 三项同证）。
+- **安卓工程已建，但一行都没编译过**：`android/` 下 12 个 Kotlin 文件 + Gradle 脚手架（AGP 8.7.3 / Kotlin 2.0.21 / Compose BOM 2024.12.01，两个 flavor）。这台云机没有 Android SDK、没有 JDK，也没有 `/dev/kvm`（`/dev/kvm` 不存在、CPU flags 无 vmx/svm），**模拟器在这台机器上根本起不来**——所以第一次编译只能在需求方 Windows 上做。这是本轮最大的不确定项，按设计文档"验收"节的说法处理，不当它已经过。
+- 报表生成**没有真 key 参与过**：假模型只证明调用形状、重试次数、时刻语义对，不证明 DeepSeek 的返回能用。
+- systemd 服务没装过（`deploy/memora.service` 只是文件）。
+- **远端是需求方的公开 GitHub 仓库**（账号与地址不入档，§9），凭据是那把仓库专用 deploy key（已开写权限），私钥只在 `~/.ssh` 下、权限 600。`main` 上是"首版服务端 + 本轮安卓端"两个提交，快进推送，没强推过。要看地址跑 `git remote -v`。
 
 ## 卡在哪
 
-- **不卡编码**。卡住"上线"的是三件需求方侧的事：把 key 写进服务端配置文件（**不要贴进对话**）、在控制台给业务端口加一条入方向规则、定 APK 由谁编译。
-- 冒烟不需要安全组规则，全程本机回环——所以 FR-01 目前只有"服务在 TLS 上应答正确"这一半证据，"手机在蜂窝网读到同一条记录"仍未验。
+- **不卡编码**，卡"上线"的是需求方侧三件事：把 key 写进服务端配置文件（**不要贴进对话**）、给业务端口加一条入方向安全组规则、在 Windows 上跑第一次编译。
+- 测试回路已经定死在 Windows：`make windows` 出 `memora.exe`（已实测是 PE32+ x86-64）→ 本机起服务 → 模拟器经 `10.0.2.2:8443` 连它 → `local` flavor 装 APK。步骤写在 `android/README.md`。冒烟全程走回环，不需要安全组，所以 FR-01 目前只有"服务在 TLS 上应答正确"这一半证据。
 
 ## 下一步
 
-1. 部署一次：`make build` → 拷二进制 → `deploy/mkcert.sh` 签证书（SAN 从环境变量取，值不入档）→ systemd 起 → 手机关 WiFi 验。**验证**：手机读到同一条记录。
-2. 填真 key，手动生成本周报表。**验证**：正文是真模型写的、`source_count` 与库里条数一致，且 `MEMORA_LLM_API_KEY` 留空时接口回 503 而不是崩。
-3. 开安卓工程（ADR-0008）。
+1. 需求方 Windows：装 Android Studio → 拷 `memora.exe` + 证书 + env → `server.crt` 改名 `memora_server_cert.pem` 放 `android/app/src/local/res/raw/` → 选 `localDebug` 运行。**验证**：能编译；编译错误贴回来逐条修（预期会有）。
+2. 模拟器里跑通记录增删改查 + 搜索 + 超限行文 + 报表生成与复制。**验证**：`memora.exe` 的库里能看到同一条，报表正文能整段复制走。
+3. 部署一次并填真 key：`deploy/mkcert.sh`（SAN 从环境变量取）→ systemd 起 → 手机关 WiFi 验。**验证**：手机读到同一条记录，且 `source_count` 与库里条数一致。
 
 ## 断点说明
 
-没有"改到一半没验证"的代码。两处已知粗糙，摆明了不藏：auth 与 config 没有自己的单测（靠 api 单测和冒烟间接兜住）；冒烟里的"上一个已结束的周期"是直接写库造的——今天永远落在当前周里，等不到上一周自己结束。
-`scripts/stub-llm.py` 会把每次调用追加到一个 hits 文件，"参数不合法时一次模型都没打""补跑一次不多打"这类断言靠它计数，不是靠日志猜。
+没有"改到一半没验证"的服务端代码。三处已知粗糙，摆明了不藏：auth 与 config 没有自己的单测（靠 api 单测和冒烟间接兜住）；冒烟里"上一个已结束的周期"是直接写库造的（今天永远落在当前周里）；**安卓那 12 个 Kotlin 文件全部只有人眼审过**，重复的 fetch 逻辑、Compose 作用域细节最容易在这种时候埋雷。
+`scripts/stub-llm.py` 把每次调用追加到 hits 文件，"参数不合法时一次模型都没打""补跑一次不多打"靠它计数，不是靠日志猜。
 
 ## 本轮改动过哪些文档
 
-- `NOW.md`：整篇重写。此前那份（17:26 及之后几次追加）写着"仍然没有一行代码"，与磁盘不符——按实测事实重来。本会话为主线（需求方指定）。
-- `design/memo-and-report.md` §7：补一句"一轮每类最多补最近六份，其余下一轮"——这是用户能观察到的行为（关机几个月后重启不会一次打几十次模型），代码已实现。
-- `INDEX.md`："代码在哪"那行不再写"尚无代码"。
-- 代码侧新增（非文档）：`Makefile`、`scripts/smoke.sh`、`scripts/stub-llm.py`、`deploy/*`、`internal/store/reports.go`、`internal/report/*`、`internal/api/reports.go` 及 32 个测试。
-- 推送前逐篇扫过标识值：`docs/` 里没有任何 IP、端口、账号、家目录、密钥；`deploy/mkcert.sh` 的地址只从环境变量来；二进制与 `*.db` / `*.key` / `*.crt` 全在 `.gitignore` 里，仓库里只有 `memora.env.example`。
+- 新建 `decisions/0010-minimal-android-deps.md`：客户端只依赖 OkHttp + kotlinx.serialization，否掉 Retrofit / Ktor / DI 容器 / 第三方加密库；并记下"证书作唯一信任锚"选它是因为漏拷文件会**编译失败**而不是运行时永远握手失败。
+- 新建 `design/android-client.md`，并按已写出的代码回填了四处：导航改为 `AppRoot` 状态机（不引导航库）、下拉刷新改"刷新"按钮、口令清除入口在顶栏、长度计数按码点。
+- `design/memo-and-report.md` §5：加 `GET /v1/periods/now` 一行；§7 那句每轮最多补六份仍标着"（推断，未实测）"。
+- `INDEX.md`：补 0010 与 android-client 两行。
+- 代码侧新增：`internal/api/periods.go`、`android/**`（含 `README.md`、`.gitignore`）；`Makefile` 加 `windows` 目标。
+- 标识值扫过两遍：`docs/` 与 `android/` 里没有 IP、端口、账号、家目录、密钥；`server` flavor 的默认地址是空串，公网地址不进仓库也不进 APK；`*.pem` / `*.keystore` 已被 ignore。
 
 ## 待确认（会影响下一步的）
 
-- **SQLite 文件谁来定期拷走**（ADR-0007 把备份简化成复制一个文件，但没有任何机制保证真会做）——"换机找回"这条需求的实际断点。
-- 定时生成的两个时刻：配置项 `MEMORA_WEEKLY_AT` / `MEMORA_MONTHLY_AT` 已留但调度**不读它们**——补跑式判据不需要精确时刻。要么删掉这两个键，要么按需求方的口径想清楚它们还有什么用。
+- **SQLite 文件谁定期拷走**（ADR-0007 把备份简化成复制一个文件，但没机制保证真做）——"换机找回"的实际断点。
+- `MEMORA_WEEKLY_AT` / `MEMORA_MONTHLY_AT` 两个键已留但调度**不读它们**（补跑式判据不需要精确时刻）：删掉，还是按需求方口径想清楚它们还有什么用。
 - 模型档位与 key（需求方自己填）。
-- 安卓端谁写、公网地址是否固定（不固定则换 IP 要重装 APK，ADR-0009）、安全组入站规则。
+- APK 图标与应用名、签名 keystore 放哪（都不进仓库）。
+- 公网地址是否固定（不固定则换 IP 要重装 APK，ADR-0009）、安全组入站规则。
