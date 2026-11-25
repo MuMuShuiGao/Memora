@@ -2,7 +2,7 @@
 
 > 状态：生效中
 > 摘要：当前进度快照与断点，新会话从这里接上
-> 更新：2026-11-26 00:41
+> 更新：2026-11-26 00:52
 
 这份文件只描述**现在**。已完成的历史进 ADR 或对应设计文档，卡了两周以上的事项应该转成 ADR 或 refactor 方案，不要赖在这里。上限 60 行。
 
@@ -20,6 +20,7 @@
 
 - **不卡编码**，卡"上线"的是需求方侧三件事：把 key 写进服务端配置文件（**不要贴进对话**）、给业务端口加一条入方向安全组规则、在 Windows 上跑第一次编译。
 - 测试回路已经定死在 Windows：`make windows` 出 `memora.exe`（已实测是 PE32+ x86-64）→ 本机起服务 → 模拟器经 `10.0.2.2:8443` 连它 → `local` flavor 装 APK。步骤写在 `android/README.md`。冒烟全程走回环，不需要安全组，所以 FR-01 目前只有"服务在 TLS 上应答正确"这一半证据。
+- **当前断点在需求方 Windows 的网络**：第一次 sync 报 `Could not install Gradle distribution ... SocketTimeoutException`，`services.gradle.org` 连不通。已改成镜像优先（Gradle 本体走腾讯云，依赖库阿里云排在官方前面，两边都验过能取到 AGP 8.7.3 / Kotlin 2.0.21 / Compose BOM 2024.12.01 的构件），等需求方 `git pull` 重跑。顺带确认：他的 AS 是 Rabbit 2、自带 JBR 25，而 Gradle 8.11 只认到 23，得选 JVM 21。
 
 ## 下一步
 

@@ -28,6 +28,24 @@
 资源名就是文件名。**没放证书是编译期失败，不是运行期失败**，这是有意的：
 装上一个连不上自己服务器的包，比编译不过难查得多。
 
+## sync 卡在下载
+
+第一次 sync 要下两样东西：Gradle 本体（约 130M）和依赖库（几百 M）。境内网络下 `services.gradle.org`
+经常直接连接超时，报的是：
+
+```
+Could not install Gradle distribution from 'https://services.gradle.org/distributions/gradle-8.11-bin.zip'
+Reason: java.net.SocketTimeoutException: Connect timed out
+```
+
+这不是工程坏了，仓库里已经配好镜像：Gradle 本体走腾讯云镜像（`gradle/wrapper/gradle-wrapper.properties`），
+依赖库把阿里云放在官方仓库前面兜底（`settings.gradle.kts`）。两边都是同一批文件，找不到就自动落到下一个仓库，
+所以在能直连官方的机器上行为不变。要换回官方地址就把那两个文件里的镜像行删掉。
+
+还有另一种可能：机器上有代理但 JVM 不走系统代理。`gradle.properties` 里加
+`systemProp.https.proxyHost` / `systemProp.https.proxyPort` 是标准做法，但先别动——上面那个报错是超时而不是 407，
+更像直连不通。
+
 ## 在 Windows 上跑模拟器
 
 只想先看它能不能编：clone → AS 打开 `android` 目录 → Build Variants 选 `localDebug` → Make Project。
