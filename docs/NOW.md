@@ -2,7 +2,7 @@
 
 > 状态：生效中
 > 摘要：当前进度快照与断点，新会话从这里接上
-> 更新：2026-11-24 18:08
+> 更新：2026-11-25 23:11
 
 这份文件只描述**现在**。已完成的历史进 ADR 或对应设计文档，卡了两周以上的事项应该转成 ADR 或 refactor 方案，不要赖在这里。上限 60 行。
 
@@ -11,7 +11,8 @@
 - **服务端已按 [design/memo-and-report.md](design/memo-and-report.md) 写完并可验收**：`cmd/memora`（`serve` / `hashpass` / `version`）+ 六块 internal（config / auth / store / period / report / api）。零 web 框架，标准库路由；直接依赖只有纯 Go 的 SQLite 驱动和 bcrypt，`CGO_ENABLED=0` 单二进制成立（ADR-0006 的前提没被打破）。
 - 三条验证腿**都是实测绿的**：`make vet`（go vet + gofmt 闸门）干净；`make test` 即 `go test -race ./...` 全过，**32 个测试**（period 7、store 2、report 14、api 9）；`make smoke` **66 项全过**——本机起 HTTPS 服务 + 假模型跑端到端，覆盖口令边界（FR-07）、归属算法、正文长度上限、报表生成与失败留痕（FR-05）、进行中周期出报（FR-06）、重启后自动补跑、限速 429。
 - 报表生成那条路径**没有真 key 参与过**：假模型只证明调用形状、重试次数、时刻语义（截止取读完记录那一刻、`generated_at` 取模型答完那一刻）都对，不证明 DeepSeek 的返回能用。
-- 还没做的：systemd 服务没装过（`deploy/memora.service` 只是文件），目录也还不是 git 仓库，安卓端零代码。
+- 还没做的：systemd 服务没装过（`deploy/memora.service` 只是文件），安卓端零代码。
+- **仓库已初始化并推上远端**：`main` 上是首个代码提交，坐在远端原有的 "Initial commit" 之上（快进，没强推）。远端是需求方的**公开** GitHub 仓库（账号与地址不入档，§9），本机凭据是那把仓库专用 deploy key（已放开写权限），私钥只在 `~/.ssh` 下、权限 600。要看地址跑 `git remote -v`。
 
 ## 卡在哪
 
@@ -35,6 +36,7 @@
 - `design/memo-and-report.md` §7：补一句"一轮每类最多补最近六份，其余下一轮"——这是用户能观察到的行为（关机几个月后重启不会一次打几十次模型），代码已实现。
 - `INDEX.md`："代码在哪"那行不再写"尚无代码"。
 - 代码侧新增（非文档）：`Makefile`、`scripts/smoke.sh`、`scripts/stub-llm.py`、`deploy/*`、`internal/store/reports.go`、`internal/report/*`、`internal/api/reports.go` 及 32 个测试。
+- 推送前逐篇扫过标识值：`docs/` 里没有任何 IP、端口、账号、家目录、密钥；`deploy/mkcert.sh` 的地址只从环境变量来；二进制与 `*.db` / `*.key` / `*.crt` 全在 `.gitignore` 里，仓库里只有 `memora.env.example`。
 
 ## 待确认（会影响下一步的）
 
