@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 端到端冒烟：本机起 HTTPS 服务 + 假模型，把设计与代码里所有可验收的断言跑一遍。
-# 不需要腾讯云安全组规则，也不需要真 API key（writing-rules §9：真值不进仓库）。
+# 不需要云厂商的安全组规则，也不需要真 API key（writing-rules §9：真值不进仓库）。
 #
 #   make smoke
 set -uo pipefail
