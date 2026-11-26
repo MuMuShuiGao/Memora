@@ -59,7 +59,7 @@ fun AppRoot(local: LocalStore, credentials: CredentialStore) {
         return
     }
 
-    val api = remember(url, secret) { MemoApi(url).apply { passphrase = secret } }
+    val api = remember(url, secret) { MemoApi(url).also { it.passphrase = secret } }
 
     Workspace(
         api = api,
