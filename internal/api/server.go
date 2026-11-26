@@ -59,6 +59,8 @@ func (s *Server) Handler() http.Handler {
 		{"GET /v1/reports", s.listReports},
 		{"GET /v1/reports/{kind}/{period_start}", s.getReport},
 		{"POST /v1/reports/{kind}/{period_start}/generate", s.generateReport},
+		{"GET /v1/app/release", s.getReleaseInfo},
+		{"GET /v1/app/release/file", s.downloadRelease},
 	} {
 		mux.Handle(p.pattern, s.gate.Middleware(p.h))
 	}

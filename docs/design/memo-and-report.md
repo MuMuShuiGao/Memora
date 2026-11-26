@@ -1,9 +1,9 @@
 # 设计：记录、待办与报表的数据、接口与传输
 
 > 状态：生效中
-> 摘要：三张表的字段与归属算法、十四个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)。
-> 更新：2026-11-26（新增待办：`tasks` 表、五个接口、报表取数纳入本周期完成的待办）
+> 摘要：三张表的字段与归属算法、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)。
+> 更新：2026-11-26（新增待办：`tasks` 表、五个接口、报表取数纳入本周期完成的待办；同日按 ADR-0015 加更新通道两条接口与 `MEMORA_RELEASE_DIR`）
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -84,7 +84,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 - **证书**：自签，ECDSA P-256。② 有效期定 **2 年**——一年一换要勤重装 APK，十年又怕泄露后换不掉；到期前 30 天服务端在日志里打提醒。换证书必须同步重装 APK，因为客户端锁定的是这张证书。
 - **客户端校验**：APK 内置该证书并做校验，**代码里不留"忽略证书错误"的开关**。没有这条，中间人换一张证书客户端毫无察觉，等于没加密（ADR-0009 的付出的那一条）。
 - **systemd**：`Restart=always`，配置文件与库文件路径通过 `EnvironmentFile` 给，不进命令行参数（避免出现在进程列表里）。
-- **配置项**：库文件路径、监听端口、`local_tz`、口令哈希、DeepSeek 的 base URL / model / key、两个定时时刻。key 只存在于服务端配置文件，需求方自己填，不进对话、不进文档。
+- **配置项**：库文件路径、监听端口、`local_tz`、口令哈希、DeepSeek 的 base URL / model / key、两个定时时刻、更新包目录（`MEMORA_RELEASE_DIR`，缺了更新接口一律 404）。key 只存在于服务端配置文件，需求方自己填，不进对话、不进文档。
 
 ## 4. 鉴权
 
@@ -113,6 +113,8 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `PATCH /v1/tasks/{id}` | 改 | 接受 `{body}` 与/或 `{done}`；`done` 从 true 改回 false 时清空 `done_at` 并把这条排到未完成队尾 |
 | `POST /v1/tasks/reorder` | 整列重排 | 请求 `{ids:[已完成拖拽的新顺序]}`，必须是**全部未完成 id 的一个排列**；服务端在一个事务里按数组下标重写 `rank=1..n`，返回重排后的列表。ids 有重复、有未知 id、漏了某条未完成 → 400 `bad_request`，不部分生效 |
 | `DELETE /v1/tasks/{id}` | 删除 | 幂等，已删除返回 404；删的是未完成项时后面的 rank 自动收紧 |
+| `GET /v1/app/release` | 有没有新版可装 | 读 `<MEMORA_RELEASE_DIR>/release.json`，回 `{version_code, version_name, notes, size}`；`size` 由服务端 stat `app.apk` 得到，不是发布时手填的。没配目录或文件不在 → 404 `not_released`；清单在而包不在（发了一半）→ 500 `release_bad` |
+| `GET /v1/app/release/file` | 拉 APK 本体 | `application/vnd.android.package-archive`，走 `http.ServeContent`，因此带 `Accept-Ranges`。文件缺失同样 404 `not_released`。服务端支持续传，客户端目前断了从头重下——10 MB 量级下那段偏移状态机不值（见 [android-client.md](android-client.md) §边界与异常） |
 
 #### 5.1 待办为什么一次给全量
 
@@ -123,6 +125,12 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 `body` 长度上限先按 2000 字符定（需求 §6 待定项之一，客户端和服务端同用一个常量配置）。超限返回 413 而不是静默截断。
 
 安卓端还有一件事归客户端：进程被杀前把未提交的输入留一份草稿，这是需求 §5 第 3 条，服务端不管（ADR-0001 不做离线，不代表可以让用户白打一段字）。
+
+#### 5.2 更新通道为什么也挂口令
+
+这两个接口读的是文件系统而不是库，跟业务数据没关系，看起来可以开放。但包里钉着的自签证书 SAN 就是服务器地址（ADR-0009），任何人都能下载就等于给任何人一个反复探测这台机器的入口，而公网那台上唯一的防线就是口令（§4）。多花的代价只有一条：客户端必须先连上才能查更新——全新安装本来就是最新的，不构成死锁。理由与备选方案见 [ADR-0015](../decisions/0015-self-hosted-apk-release-channel.md)。
+
+发版动作在 `scripts/release.sh`：版本号从 `android/app/build.gradle.kts` 里读，不让人再抄一遍（抄错就是一次装不上的更新）；包和清单先写 `<目录>.tmp.$$` 再整体换名，避免出现"清单已到位、包还没传完"那个半成品窗口——那种状态接口按设计回 500 `release_bad`。
 
 ## 6. 生成报表
 

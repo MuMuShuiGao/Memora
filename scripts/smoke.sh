@@ -23,6 +23,7 @@ KEY='smoke-passphrase-not-reused'
 STUB_KEY='smoke-stub-key-ascii-only'
 ENV=$WORK/memora.env
 HITS=$WORK/llm-hits.jsonl
+RELEASE=$WORK/release
 BIN=$WORK/memora$(go env GOEXE)
 SRV_PID=''
 STUB_PID=''
@@ -117,7 +118,11 @@ MEMORA_LOCAL_TZ=+08:00
 MEMORA_LLM_BASE_URL=http://127.0.0.1:${STUB_PORT}/v1
 MEMORA_LLM_MODEL=冒烟假模型
 MEMORA_LLM_API_KEY=$STUB_KEY
+MEMORA_RELEASE_DIR=$RELEASE
 EOF
+
+# 更新目录先空着：进版那一段要的就是"一个版都没发过"这个起点（ADR-0015）。
+mkdir -p "$RELEASE"
 
 STUB_LLM_HITS="$HITS" "$PY" scripts/stub-llm.py "127.0.0.1:${STUB_PORT}" >"$WORK/stub.log" 2>&1 &
 STUB_PID=$!
@@ -344,6 +349,29 @@ start_server server-again.log || exit 1
 sleep 3
 check "第二轮什么都没补" 0 "$(hits)"
 infl "但判据确实跑了" "待补周期=0" "$WORK/server-again.log"
+
+say "更新通道：一个版都没发过的样子（ADR-0015）"
+check "更新元数据同样要口令" 401 "$(code "$BASE/v1/app/release")"
+check "更新包同样要口令" 401 "$(code "$BASE/v1/app/release/file")"
+check "空目录 = 404，不是 500" 404 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/app/release")"
+has "404 带 not_released 码（客户端据此静默）" "not_released" "$(get "/v1/app/release")"
+check "没包的时候下载也是 404" 404 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/app/release/file")"
+
+say "更新通道：发一版"
+printf '%s' '{"version_code":99,"version_name":"9.9","notes":"冒烟版"}' >"$RELEASE/release.json"
+"$PY" -c "import sys;open(sys.argv[1],'wb').write(b'MEMORA-SMOKE-APK'*64)" "$RELEASE/app.apk"
+META=$(get "/v1/app/release")
+check "version_code 原样带回，客户端只比这个数" 99 "$(printf '%s' "$META" | jqp "['version_code']")"
+check "size 由服务端 stat 出来，不是发布时手填的" 1024 "$(printf '%s' "$META" | jqp "['size']")"
+has "更新说明带回给客户端" "冒烟版" "$META"
+check "拉到的包与服务端那个字节一致" \
+  "$("$PY" -c "import hashlib,sys;print(hashlib.sha256(open(sys.argv[1],'rb').read()).hexdigest()[:12])" "$RELEASE/app.apk")" \
+  "$(curl -sk -H "X-Access-Key: $KEY" "$BASE/v1/app/release/file" | "$PY" -c 'import hashlib,sys;print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest()[:12])')"
+check "Range 续传生效（断了不必重拉整包）" 206 "$(code -H "X-Access-Key: $KEY" -H "Range: bytes=0-9" "$BASE/v1/app/release/file")"
+# 发了一半（json 在、包不在）属于部署事故，不能安静地当成"没发版"
+mv "$RELEASE/app.apk" "$RELEASE/app.apk.off"
+check "只有 release.json = 500 release_bad" 500 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/app/release")"
+mv "$RELEASE/app.apk.off" "$RELEASE/app.apk"
 
 say "限速：连续失败到阈值后，口令对了也不给过"
 for _ in 1 2 3 4 5; do code -H 'X-Access-Key: 故意错' "$BASE/v1/notes" >/dev/null; done
