@@ -30,7 +30,8 @@
 
 ## 第一次 sync 失败
 
-两种失败模式，报错长得不一样，都好认。仓库里已经把该配的配上了，只有 JVM 那一条得你在机器上写。
+三种失败模式，报错长得不一样，都好认。仓库里已经把该配的配上了，只有 JVM 那两条得你在机器上配，
+其中 **IDE 那条只能手点、仓库带不过来**。
 
 **`Could not install Gradle distribution ... Connect timed out`**——Gradle 本体下不动。官方地址会 307 跳到
 GitHub Releases，实测只有 60KB/s 量级，130 MiB 要跑半个多小时。仓库里已改走华为云镜像
@@ -41,15 +42,35 @@ GitHub Releases，实测只有 60KB/s 量级，130 MiB 要跑半个多小时。�
 要是报的是 `zip END header not found`：`~/.gradle/wrapper/dists/` 下留着一个不是 zip 的坏文件，
 **改地址不会让它重新下载**，先把对应的哈希目录删掉再 sync。
 
-**`* What went wrong:` 后面只有一行版本号，比如 `25.0.4`**——构建 JVM 太新，跟网络没关系。
-Android Studio Rabbit 2 自带 JBR 25，Gradle 8.11 只支持到 23。在**用户级** `~/.gradle/gradle.properties`
-里写一行 `org.gradle.java.home=<一个 17~23 的 JDK 路径>`。这条会盖掉 IDE 选的 Gradle JDK，命令行
-`gradlew` 也走它——实测过：启动时故意用 JBR 25，daemon 仍按这条起在 17，构建通过。不放项目级
-`gradle.properties` 是因为那要提交，而里面是绝对路径。
+**构建 JVM 太新**——跟网络没关系。Android Studio Rabbit 2 自带 JBR 25，Gradle 8.11 只支持到 23，
+`~/.jdks/` 下通常只有 17 能用（`openjdk-24` 同样超上限）。IDE 和命令行是**两套入口，各配一次**，
+只配一个会只修好一半：
+
+| 报错长什么样 | 卡在哪一步 | 要改的地方 |
+| --- | --- | --- |
+| `Incompatible Gradle JVM version` / `... Gradle JVM version 25 currently selected`，几百毫秒就失败 | IDE 把它解析出的 JVM 显式交给 Tooling API 起构建，Gradle 当场拒绝 | AS 的 **Gradle JDK** 下拉框，选 17 |
+| `* What went wrong:` 后面只有一行版本号，比如 `25.0.4` | 命令行 `gradlew` 起的 daemon 用了 25 | 用户级 `~/.gradle/gradle.properties` 的 `org.gradle.java.home` |
+
+**IDE 这条只能手点，仓库里带不过来。** 在报错弹窗点 `Open JVM settings`，或
+Settings → Build, Execution, Deployment → Build Tools → Gradle → **Gradle JDK**，选 `ms-17.0.14`
+（列表里没有就 Other… 指到 `~/.jdks/` 下那个 17）。选择落在 `.idea/gradle.xml` 的 `gradleJvm`，
+而 `.idea/` 不进仓库——**每次新 clone、每次删掉 `.idea/` 都要重新点一遍**。
+
+弹窗和列表里那几个别碰：`Use JVM 21` 会去下载一份新 JDK（本机没有 21）；`openjdk-24` 超上限；
+Oracle `1.8.0_351` 虽然落在 8~23 区间，但 AGP 8.7 要求 17，报错只会推到下一环。
+
+**别指望 `local.properties` 的 `java.home`。** `.idea/gradle.xml` 里那个 `#GRADLE_LOCAL_JAVA_HOME` 宏
+看着像正路，但实测把 17 写回去之后，AS 重启、重新打开设置，宏解析出来的仍是 JBR 25——这个值没被采纳，
+原因没查清。别再往这个文件里加，见 [ADR-0012](../docs/decisions/0012-ide-and-cli-gradle-jvm.md)。
+
+**命令行这条**：在**用户级** `~/.gradle/gradle.properties` 里写一行
+`org.gradle.java.home=<一个 17~23 的 JDK 路径>`，命令行 `gradlew` 走它——实测过：启动时故意用 JBR 25，
+daemon 仍按这条起在 17，构建通过。不放项目级 `gradle.properties` 是因为那要提交，而里面是绝对路径。
 
 ## 在 Windows 上跑模拟器
 
-只想先看它能不能编：clone → AS 打开 `android` 目录 → Build Variants 选 `localDebug` → Make Project。
+只想先看它能不能编：clone → AS 打开 `android` 目录 → **第一次要按上一节把 Gradle JDK 点成 17** →
+Build Variants 选 `localDebug` → Make Project。
 不需要服务端，也不需要拷任何文件（证书已在仓库里）。要真跑起来才往下走。
 
 1. 装 Android Studio（自带 SDK、模拟器、JDK）。

@@ -2,7 +2,8 @@
 
 > 状态：生效中
 > 摘要：Gradle 本体从华为云镜像取、依赖库阿里云两个仓库排在官方前面；构建 JVM 固定为本机的 JDK 17，不用 AS 自带的 JBR 25
-> 日期：2026-11-26 ｜ 关联：[0010](0010-minimal-android-deps.md)、[../design/android-client.md](../design/android-client.md)、提交 `a5b546c` `4a056fd`
+> 日期：2026-11-26 ｜ 关联：[0010](0010-minimal-android-deps.md)、[0012](0012-ide-and-cli-gradle-jvm.md)、[../design/android-client.md](../design/android-client.md)、提交 `a5b546c` `4a056fd`
+> 更正：第 3 条"不依赖 Android Studio 的 Gradle JDK 下拉框"已被实测推翻——IDE 把自己解析的 JVM 显式交给 Tooling API，`org.gradle.java.home` 管不到那条路，AS 里必须手点 Gradle JDK。见 [0012](0012-ide-and-cli-gradle-jvm.md)。镜像那两条不受影响，正文按规则保留原样。
 
 ## 决策
 

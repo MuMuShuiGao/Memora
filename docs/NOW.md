@@ -2,7 +2,7 @@
 
 > 状态：生效中
 > 摘要：当前进度快照与断点，新会话从这里接上
-> 更新：2026-11-26 01:17
+> 更新：2026-11-26 12:11
 
 这份文件只描述**现在**。已完成的历史进 ADR 或对应设计文档，卡了两周以上的事项应该转成 ADR 或 refactor 方案，不要赖在这里。上限 60 行。
 
@@ -11,7 +11,7 @@
 - **服务端写完并可验收**：`cmd/memora`（`serve` / `hashpass` / `version`）+ 六块 internal（config / auth / store / period / report / api）。零 web 框架；直接依赖只有纯 Go 的 SQLite 驱动和 bcrypt，`CGO_ENABLED=0` 单二进制成立（ADR-0006）。
 - 验证腿**都是实测绿的**：`make vet` 干净；`make test` 全过，**33 个测试**（period 7、store 2、report 14、api 10）；`make smoke` **70 项全过**——本机起 HTTPS + 假模型跑端到端，覆盖口令边界（FR-07）、归属算法、正文上限、报表生成与失败留痕（FR-05）、进行中周期出报（FR-06）、重启补跑、限速 429。
 - 本轮为安卓端补的两件事，都有实测：`GET /v1/periods/now`（周期只在服务端算一份，客户端不许再写一遍周一规则）；`deploy/mkcert.sh` 支持逗号分隔多地址 SAN（验过 `10.0.2.2 + 127.0.0.1 + localhost` 三项同证）。
-- **安卓工程已在需求方 Windows 上首次编译通过**：`android/` 下 12 个 Kotlin 文件 + Gradle 脚手架（AGP 8.7.3 / Kotlin 2.0.21 / Compose BOM 2024.12.01，两个 flavor）。`localDebug` 全绿，APK 实测 9.6 MiB、`res/raw/memora_server_cert.pem` 在包里；`serverDebug` 停在缺证书那一步，报 `raw/memora_server_cert not found`——按设计该是编译期失败，实测确实是。整轮只改了一处真实编译错误（`CredentialStore.passphrase()` 表达式体里用了 `return`，改块体）。这台云机没有 Android SDK、也没有 `/dev/kvm`，模拟器仍只能在 Windows 上跑。
+- **安卓工程已在需求方 Windows 上首次编译通过**（`localDebug` 全绿，APK 9.6 MiB），**且 AS 的 Gradle sync 也首次通过**：`android/` 下 12 个 Kotlin 文件 + Gradle 脚手架（AGP 8.7.3 / Kotlin 2.0.21 / Compose BOM 2024.12.01，两个 flavor）。`localDebug` 全绿，APK 实测 9.6 MiB、`res/raw/memora_server_cert.pem` 在包里；`serverDebug` 停在缺证书那一步，报 `raw/memora_server_cert not found`——按设计该是编译期失败，实测确实是。整轮只改了一处真实编译错误（`CredentialStore.passphrase()` 表达式体里用了 `return`，改块体）。这台云机没有 Android SDK、也没有 `/dev/kvm`，模拟器仍只能在 Windows 上跑。
 - 报表生成**没有真 key 参与过**：假模型只证明调用形状、重试次数、时刻语义对，不证明 DeepSeek 的返回能用。
 - systemd 服务没装过（`deploy/memora.service` 只是文件）。
 - **远端是需求方的公开 GitHub 仓库**（账号与地址不入档，§9），凭据是那把仓库专用 deploy key（已开写权限），私钥只在 `~/.ssh` 下、权限 600。`main` 上是"服务端首版 → 安卓端 → 文档脱敏"一串快进提交，没强推过、没改写历史。要看地址跑 `git remote -v`。
@@ -20,7 +20,8 @@
 
 - **不卡编码**，卡"上线"的是需求方侧两件事：把 key 写进服务端配置文件（**不要贴进对话**）、给业务端口加一条入方向安全组规则。原来第三件"在 Windows 上跑第一次编译"本轮已完成。
 - 测试回路已经定死在 Windows：`make windows` 出 `memora.exe`（已实测是 PE32+ x86-64）→ 本机起服务 → 模拟器经 `10.0.2.2:8443` 连它 → `local` flavor 装 APK。步骤写在 `android/README.md`。冒烟全程走回环，不需要安全组，所以 FR-01 目前只有"服务在 TLS 上应答正确"这一半证据。
-- **sync 那两个拦路石已解掉**（Windows 实测）：Gradle 本体改走华为云镜像，构建 JVM 定在本机已有的 JDK 17。方案与否决理由在 [ADR-0011](decisions/0011-build-mirror-and-gradle-jvm.md)，排障步骤在 `android/README.md`，这里不重述。纠正一条旧记录：之前写的"得选 JVM 21"是记错了，本机没有 21，17~23 都行。
+- **sync 两个拦路石都已解掉**（Windows 实测）：Gradle 本体走华为云镜像（[ADR-0011](decisions/0011-build-mirror-and-gradle-jvm.md)），JVM 靠**在 AS 里手点 Gradle JDK = `ms-17.0.14`**，12:03 `onSuccess(RESOLVE_PROJECT)`，之后 `Incompatible` 零次。纠正两条我自己写错的结论：`java.home` 那条**实测没被 AS 采纳**（写回 17、重启后宏仍解析出 JBR 25），已从 `local.properties` 撤掉；机制也不是"IDE 预检"，堆栈显示 IDE 真的发起了构建、由 Gradle 拒绝。代价记下来：这个选择落在 `.idea/gradle.xml`，被 ignore、仓库带不过去，**别人 clone 后第一次 sync 仍要手点**——已写进 `android/README.md` 的步骤。结论在 [ADR-0012](decisions/0012-ide-and-cli-gradle-jvm.md)。两条都要写的结论在 [ADR-0012](decisions/0012-ide-and-cli-gradle-jvm.md)。
+- 模拟器侧已探明的前提：本机 WHPX 可用（`emulator -accel-check` 实测），AVD `Medium_Phone_API_37.0` 完整（x86_64 / API 37），不需要新建。
 
 ## 下一步
 
@@ -44,6 +45,8 @@
 - 标识值扫过两遍：`docs/` 与 `android/` 里没有 IP、端口、账号、家目录、密钥；`server` flavor 的默认地址是空串，公网地址不进仓库也不进 APK；`*.pem` / `*.keystore` 已被 ignore。
 - **事后又扫了一遍全部历史**（仓库是公开的，推送已完成，所以这轮是审计不是事前检查）：全部提交里没有任何 IP、口令哈希真值、API key、证书、`.db`、邮箱、手机号、家目录——冒烟与单测全是合成数据。补堵了一处漏网的：ADR-0009 与 `scripts/smoke.sh` 原本写着云厂商与区域，现改成"云上主机/云厂商的安全组"。要说清：**改 HEAD 抹不掉历史**，厂商+区域仍能从 `12835de` 那批提交里翻出来；另外最新提交的 git 作者是这台机器的默认身份（账号名+厂商字样），修正它要 force push `main`——问过，需求方选择接受，见"待确认"。
 - 本轮（Windows 首次编译）：新建 [ADR-0011](decisions/0011-build-mirror-and-gradle-jvm.md) 记下镜像与 JVM 两条决定，`INDEX.md` 补一行；`gradle-wrapper.properties` 镜像换成华为云并删掉没起作用的 `networkTimeout`；`settings.gradle.kts` 删掉冗余的阿里云 `gradle-plugin` 仓库；`android/README.md` 顶部"还没编译过"换成实测结论、排障两节合成一节；`CredentialStore.kt` 一处表达式体改块体；`android/.gitignore` 补 `.idea/`。仓库内只写占位符不写绝对路径，JVM 那条实际落在仓库外的用户级 `~/.gradle/gradle.properties`。
+
+- 本轮（AS 里 sync 报 JVM 不兼容，最后通了）：新建 [ADR-0012](decisions/0012-ide-and-cli-gradle-jvm.md)（含两处我自己写错的结论和更正过程），`INDEX.md` 补一行并顺手改掉"安卓尚未编译验证过"的过时说法；ADR-0011 只加头部更正行，正文不动；`android/README.md` 排障段改成"IDE 手点 / 命令行配置"两套入口的对照表，并把"第一次必须手点 Gradle JDK"写进跑模拟器那节；`local.properties` 里我加的 `java.home` 已撤（未生效的配置不留）。两条方法教训进了 0012：**没验证过的配置该标"未验证"而不是删掉**，以及**"这个 JVM 值是对的"推不出"IDE 会从我写的这行读到它"**。
 
 ## 待确认（会影响下一步的）
 

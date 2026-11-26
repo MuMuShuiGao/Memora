@@ -5,7 +5,7 @@
 
 **项目一句话**：给一个人用的安卓备忘录，随手记纯文字想法，由大模型按自然周/自然月汇总成能直接交出去的周报和月报。
 
-**代码在哪**：服务端在仓库根目录（`cmd/memora` + `internal/` 六块，Go 单二进制），安卓端在 `android/`（Kotlin + Compose，两个 flavor，**尚未编译验证过**）。设计与验收口径见 [design/memo-and-report.md](design/memo-and-report.md) 与 [design/android-client.md](design/android-client.md)，当前进度与断点见 [NOW.md](NOW.md)。
+**代码在哪**：服务端在仓库根目录（`cmd/memora` + `internal/` 六块，Go 单二进制），安卓端在 `android/`（Kotlin + Compose，两个 flavor，`localDebug` 已编译通过、尚未在模拟器里运行过）。设计与验收口径见 [design/memo-and-report.md](design/memo-and-report.md) 与 [design/android-client.md](design/android-client.md)，当前进度与断点见 [NOW.md](NOW.md)。
 
 ---
 
@@ -29,6 +29,7 @@
 | [decisions/0009-public-ip-selfsigned-https-access.md](decisions/0009-public-ip-selfsigned-https-access.md) | 生效中 | 服务端在公网 IP 上以自签证书提供 HTTPS，证书内置进 APK 做校验；安全组只放行这一个业务端口 |
 | [decisions/0010-minimal-android-deps.md](decisions/0010-minimal-android-deps.md) | 生效中 | 客户端只依赖 OkHttp + kotlinx.serialization，网络层手写；否掉 Retrofit、Ktor、DI 容器、第三方加密库 |
 | [decisions/0011-build-mirror-and-gradle-jvm.md](decisions/0011-build-mirror-and-gradle-jvm.md) | 生效中 | Gradle 本体从华为云镜像取、依赖库阿里云两个仓库排在官方前面；构建 JVM 固定为本机的 JDK 17，不用 AS 自带的 JBR 25 |
+| [decisions/0012-ide-and-cli-gradle-jvm.md](decisions/0012-ide-and-cli-gradle-jvm.md) | 生效中 | AS 里必须把 Gradle JDK 显式选成 17（落在 `.idea/gradle.xml`），命令行靠用户级 `org.gradle.java.home`；`local.properties` 的 `java.home` 实测没被 AS 采纳，已撤 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
 | [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 两张表的字段与归属算法、九个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
 | [design/android-client.md](design/android-client.md) | 生效中 | 手机端界面划分、本地只存哪四样、九个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
