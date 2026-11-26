@@ -1,10 +1,9 @@
-# 设计：记录与报表的数据、接口与传输
+# 设计：记录、待办与报表的数据、接口与传输
 
 > 状态：生效中
-> 摘要：两张表的字段与归属算法、九个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 更新：2026-11-24 18:55
-
-依据 [ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)。
+> 摘要：三张表的字段与归属算法、十四个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)。
+> 更新：2026-11-26（新增待办：`tasks` 表、五个接口、报表取数纳入本周期完成的待办）
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -31,6 +30,26 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 关键词过滤用 `body LIKE '%q%' ESCAPE '\'`。千条量级下全表扫也不需要 FTS（估算）；q 必须做 `LIKE` 通配符转义，且一律用参数绑定，不拼字符串。
 
+### `tasks`
+
+待办是与记录平行的第二类对象（ADR-0014）：多两列状态，排序语义完全不同，所以不复用 `notes`。
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY | 自增 |
+| `body` | TEXT NOT NULL | 原文，同样不改写（ADR-0005） |
+| `done` | INTEGER NOT NULL DEFAULT 0 | 0 未完成 / 1 已完成。CHECK 只认这两个值 |
+| `rank` | INTEGER NOT NULL | 未完成序列内的名次，从 1 起连续无空洞 |
+| `done_at` | TEXT | 勾掉的时刻，UTC。未完成时为 NULL，它是报表归属的依据 |
+| `done_week_start` / `done_month_start` | TEXT | ① 同 `notes` 那两列的写法，但算的是**完成那一刻**所在的周/月。未完成时为 NULL |
+| `created_at` / `updated_at` | TEXT NOT NULL | 同 `notes` |
+
+索引：`idx_tasks_open (done, rank)`、`idx_tasks_done (done, done_at DESC)`、`idx_tasks_done_week (done_week_start)`、`idx_tasks_done_month (done_month_start)`。
+
+`rank` 只在 `done = 0` 的集合里有意义，且**每次写操作之后整体重编**：新建排第 1（刚想起来的事正因为要先做才会去记），删除、勾掉、取消勾选、拖拽都走"按给定顺序重编号"这一条路径。代价是一次拖拽写 N 行，换来的是"前 5 名"这个查询不需要处理并列、空洞、分数耗尽这三种情况——待办量级是几十条（估算），一个事务里重写全部未完成的 rank 毫无压力。
+
+已完成的行保留它勾掉那一刻的 rank 但不再维护，已完成区按 `done_at` 倒序显示。`done = 1` 的行不参与重编号，所以 rank 的连续性约束只覆盖未完成集。
+
 ### `reports`
 
 | 列 | 类型 | 说明 |
@@ -56,6 +75,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 - 周一为一周首日；`week_start = 该日本地日期回退到本周周一`
 - 手动生成"本周/本月"这类未结束的周期时，`period_end` 仍写自然终点，但**取记录的界限是 `min(now, period_end 23:59:59)`**，`generated_at` 记录实际截止时刻。需求 §4"生成中的报表"由此落地。
 - 取记录条件：`week_start = ?`（或 `month_start = ?`），不看 `updated_at`。
+- **待办看完成时刻，不看 `created_at`**：一条待办归哪个周期，只由"它在哪一周被勾掉"决定，上周记的待办这周做完就算这周的（需求 §4 完成时刻、FR-11）。没勾掉的待办不属于任何报表周期。落法与记录的 ① 同源：勾掉那一刻把 `done_week_start` / `done_month_start` 冗余存下，取消勾选就清空，查询走列相等而不是时间区间——SQL 里不出现日期与时区函数，`done_at` 永不可能是未来值，所以"生成中的周期截至此刻"这条对待办天然成立，不需要额外条件。
 
 ## 3. 传输与部署
 
@@ -88,6 +108,17 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `GET /v1/reports` | 报表列表 | `kind`、`limit`；返回含 `status` |
 | `GET /v1/reports/{kind}/{period_start}` | 取单份 | 未生成返回 404 + `code:"not_generated"` |
 | `POST /v1/reports/{kind}/{period_start}/generate` | 手动生成 | 同步返回结果；失败也要落 `status=failed` |
+| `GET /v1/tasks` | 待办全量 | 无分页：未完成按 `rank` 升序、已完成按 `done_at` 降序，一次返回 `{tasks, open_count, done_count}`。不分页的理由写在下面 §5.1 |
+| `POST /v1/tasks` | 新建 | 请求 `{body}`；响应含 `rank=1`、`done=false`——新建插到队首，其余顺延 |
+| `PATCH /v1/tasks/{id}` | 改 | 接受 `{body}` 与/或 `{done}`；`done` 从 true 改回 false 时清空 `done_at` 并把这条排到未完成队尾 |
+| `POST /v1/tasks/reorder` | 整列重排 | 请求 `{ids:[已完成拖拽的新顺序]}`，必须是**全部未完成 id 的一个排列**；服务端在一个事务里按数组下标重写 `rank=1..n`，返回重排后的列表。ids 有重复、有未知 id、漏了某条未完成 → 400 `bad_request`，不部分生效 |
+| `DELETE /v1/tasks/{id}` | 删除 | 幂等，已删除返回 404；删的是未完成项时后面的 rank 自动收紧 |
+
+#### 5.1 待办为什么一次给全量
+
+待办的界面要"按优先级只露前 5、其余折叠"（FR-09），折叠区一点就要全看到——分两次拉会把"展开"这个动作变成一次网络等待。而待办天然会被勾掉或删除，长期停留在几十条量级（估算），远够不到 `notes` 那个 200 的上限。所以 `GET /v1/tasks` 一次返回全部，服务端另加一个 500 条的安全上限（估算，防的是库里攒了几年的极端情况），超出的已完成项不返回。
+
+`reorder` 走整列提交而不是单条改 rank，是为了让"拖一次"只对应一个请求：单条改动在中途网络失败时会留下一个"客户端显示新顺序、服务端是旧顺序"的分叉，而整列提交失败后客户端本地回滚、再拉一次就和服务端一致了。
 
 `body` 长度上限先按 2000 字符定（需求 §6 待定项之一，客户端和服务端同用一个常量配置）。超限返回 413 而不是静默截断。
 
@@ -95,10 +126,12 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 ## 6. 生成报表
 
-1. 按周期取全部 `notes.body`，按 `created_at` 升序拼进提示词，条数写进 `source_count`。
-2. 调 DeepSeek 的对话补全接口（OpenAI 兼容），`model` 走配置。提示词要点：只用给到的内容、不编造未提到的交付物（需求 §5 第 4 条）、按主题归并而非逐日流水、输出纯文本。
+1. 按周期取全部 `notes.body`，按 `created_at` 升序；另取该周期内**已完成**的 `tasks.body`，按 `done_at` 升序。两路素材分开列进提示词，不混成一段——模型要分得清"我记下的想法"和"我勾掉的事项"，否则需求 §5 第 4 条那条"不许编造"没法归因。条数写进 `source_count`。
+1.1 `source_count` 的口径由此变了：它是**喂给模型的素材条数**（记录数 + 本周期完成的待办数），不再是"该周期记录条数"。FR-08 的验收文案跟着改成"依据了多少条素材"。
+1.2 空周期的判据仍是"两路加起来为 0"：本周一条记录都没记、但勾掉了三条待办，照样要能出报（那三条正是这周做完的事）。
+2. 调 DeepSeek 的对话补全接口（OpenAI 兼容），`model` 走配置。提示词要点：只用给到的内容、不编造未提到的交付物（需求 §5 第 4 条）、按主题归并而非逐日流水、输出纯文本。**两类素材分段给出且标明语义**——勾掉的待办就是已交付，想法只是当时的念头；混成一段模型就分不开这两件事，"不许编造"那条也就没了核查抓手。
 3. 超时与重试：单次调用超时给到 60s（FR-04 的量级），失败重试 1 次；仍失败则 `status=failed` + `fail_reason`。
-4. 空周期（0 条记录）不生成，直接返回 `code:"no_records"`——避免让模型憋出一份空话。
+4. 空周期（记录与已完成待办两路都为 0）不生成，直接返回 `code:"no_records"`——避免让模型憋出一份空话。
 
 ## 7. 定时
 
@@ -107,6 +140,8 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 这个形状顺手把 FR-05 的"服务中断错过时刻要能补、不静默缺失"变成自然结果：判断依据是"该周期有没有 ready 报表"，而不是"现在是不是周一早上八点"。机器关机两天再起来，漏掉的周期会被自动补上。代价是每小时空转一次查询，可忽略。
 
 具体两个时刻（周报、月报各自周几几点）仍待需求方定，配置项留好。
+
+候选周期来自两路并集去重：`notes` 的 `DISTINCT week_start` 与 `tasks` 的 `DISTINCT done_week_start`。只靠前者会漏掉"这周一条笔记没记、但勾掉三件事"的那一周，而那一周恰恰最需要自动出报（FR-05 的不静默缺失对两类素材同等成立）。
 
 一轮扫描里每种报表最多补最近六份，其余留到下一轮。理由是：关机几个月后重启，候选可能有几十周，一次全打完会把重启后的头几分钟全占在排队等模型上（推断，未实测）。候选按周期由新到旧排，所以先拿到的是最近的。
 
