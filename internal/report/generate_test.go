@@ -193,7 +193,8 @@ func TestOnlyTasksStillGenerates(t *testing.T) {
 	}
 }
 
-func TestGenerateFailureLandsFailed(t *testing.T) {	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
+func TestGenerateFailureLandsFailed(t *testing.T) {
+	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
 	boom := errors.New("模型接口 HTTP 503")
 	llm := &fakeCompleter{errs: []error{boom, boom}}
 	g, st := newTestGenerator(t, llm, &now)
