@@ -8,16 +8,47 @@ set -uo pipefail
 cd "$(dirname "$0")/.."
 ROOT=$PWD
 WORK=$(mktemp -d)
+# MSYS 的 /tmp 是它自己的虚拟挂载点，原生 Windows 程序（go、被 -config 喂进去的那些路径）
+# 照着当前盘符去解析它，于是库文件与证书会写到别处去。换成正斜杠的 Windows 路径，
+# 两边说的是同一个目录；Linux 上没有 cygpath，这一行自然跳过。
+command -v cygpath >/dev/null 2>&1 && WORK=$(cygpath -m "$WORK")
 PORT=${SMOKE_PORT:-18443}
 STUB_PORT=${STUB_PORT:-18480}
 BASE=https://127.0.0.1:${PORT}
-KEY='冒烟口令-勿复用'
+# 必须 ASCII，和 STUB_KEY 同一条理由：Git Bash 的 curl 会先把命令行参数按本机 ANSI 码页
+# （中文 Windows 是 GBK）压进请求头，服务端 latin-1 解出来的字节和 printf 喂给 hashpass 的
+# UTF-8 不是同一串，bcrypt 对不上——于是"口令正确"这一项在 Windows 上永远 401。
+# 安卓端不受影响：OkHttp 直接发 UTF-8。
+KEY='smoke-passphrase-not-reused'
 STUB_KEY='smoke-stub-key-ascii-only'
 ENV=$WORK/memora.env
 HITS=$WORK/llm-hits.jsonl
-BIN=$WORK/memora
+BIN=$WORK/memora$(go env GOEXE)
 SRV_PID=''
 STUB_PID=''
+
+# 这台机器上叫 python3 的那条可能是 Windows 的应用商店占位符（跑什么都不输出、退出码 49），
+# 所以按"能不能真跑起来"挑解释器而不是按名字挑。真值不进仓库，这里挑到的只是个命令名。
+PY=''
+for p in python3 python py; do
+  if command -v "$p" >/dev/null 2>&1 && "$p" -c 'import sys, sqlite3' >/dev/null 2>&1; then PY=$p; break; fi
+done
+if [[ -z "$PY" ]]; then
+  echo "冒烟需要带 sqlite3 模块的 Python（python3 / python / py 任一）"
+  exit 1
+fi
+# Python 在中文 Windows 上按 ANSI 码页收发 stdio：服务端回的是 UTF-8，它拿 GBK 解，
+# 一个汉字后面的引号会被当成第二个尾字节吃掉，于是 JSON 解析当场报错。
+# 另外 print('阿'*2000) 经 GBK 出来是 4000 字节，正文长度上限那两项会误判成超限。
+export PYTHONUTF8=1
+
+# Git Bash 把 UTF-8 命令行参数按 ANSI 码页转一遍才交给 Windows 版 curl，中文正文进库前
+# 就成了 GBK（安卓端不受影响：OkHttp 直接发 UTF-8）。凡是载荷里带非 ASCII，一律写进文件
+# 再 -d @文件——curl 自己按字节读，中间没人转码。用法：-d "$(payload '{...}')"。
+BODYF=$WORK/body.json
+payload() { printf '%s' "$1" >"$BODYF"; printf '@%s' "$BODYF"; }
+# 查询串同理：先按 UTF-8 百分号编码，落到 curl 参数上时已经全是 ASCII。
+qenc() { printf '%s' "$1" | "$PY" -c 'import sys,urllib.parse;print(urllib.parse.quote(sys.stdin.buffer.read()))'; }
 
 pass=0; fail=0
 ok()     { pass=$((pass+1)); printf '  ✓ %s\n' "$1"; }
@@ -30,9 +61,9 @@ say()    { printf '\n== %s\n' "$1"; }
 hits()   { awk 'END{print NR+0}' "$HITS" 2>/dev/null; }
 code()   { curl -sk -o /dev/null -w '%{http_code}' "$@"; }
 get()    { curl -sk -H "X-Access-Key: $KEY" "$BASE$1"; }
-jqp()    { python3 -c "import json,sys; d=json.load(sys.stdin); print(d$1)"; }
+jqp()    { "$PY" -c "import json,sys; d=json.load(sys.stdin); print(d$1)"; }
 # 时间戳转 epoch 秒。Go 写的是纳秒，Python 3.10 的 fromisoformat 最多吃到微秒，先裁掉尾巴。
-iso_ts() { python3 -c '
+iso_ts() { "$PY" -c '
 import json, re, sys, datetime as dt
 s = json.load(sys.stdin)[sys.argv[1]]
 s = re.sub(r"(\.\d{6})\d+", r"\1", s)
@@ -61,7 +92,9 @@ go build -o "$BIN" ./cmd/memora || { echo "编译失败"; exit 1; }
 [[ -x "$BIN" ]] || { echo "二进制没产出"; exit 1; }
 ok "go build 产出单二进制"
 
-MEMORA_PUBLIC_IP=127.0.0.1 bash deploy/mkcert.sh "$WORK/tls" >"$WORK/mkcert.log" 2>&1
+# MSYS_NO_PATHCONV 只在签证书这一步要：Git Bash 会把 openssl 的 -subj "/CN=memora"
+# 改写成 D:/Git/CN=memora，openssl 直接报格式错（同 android/README.md 那条）。
+MEMORA_PUBLIC_IP=127.0.0.1 MSYS_NO_PATHCONV=1 bash deploy/mkcert.sh "$WORK/tls" >"$WORK/mkcert.log" 2>&1
 [[ -f "$WORK/tls/server.crt" && -f "$WORK/tls/server.key" ]] \
   || { echo "证书没生成：$(cat "$WORK/mkcert.log")"; exit 1; }
 ok "自签 ECDSA 证书就绪（SAN=IP:127.0.0.1）"
@@ -70,7 +103,7 @@ ok "自签 ECDSA 证书就绪（SAN=IP:127.0.0.1）"
 HASH=$(printf '%s' "$KEY" | "$BIN" hashpass | head -1)
 [[ "$HASH" == '$2'* ]] && ok "hashpass 产出 bcrypt 哈希" || { echo "hashpass 没吐出哈希: $HASH"; exit 1; }
 "$BIN" hashpass </dev/null >/dev/null 2>&1 && bad "空输入应失败" "却成功了" || ok "空输入被拒绝"
-printf '%s' "$(python3 -c "print('长'*100)")" | "$BIN" hashpass >/dev/null 2>&1 \
+printf '%s' "$("$PY" -c "print('长'*100)")" | "$BIN" hashpass >/dev/null 2>&1 \
   && bad "超 72 字节应失败" "却成功了" || ok "超 72 字节的口令被拒绝"
 "$BIN" version >/dev/null && ok "version 子命令可用"
 
@@ -86,7 +119,7 @@ MEMORA_LLM_MODEL=冒烟假模型
 MEMORA_LLM_API_KEY=$STUB_KEY
 EOF
 
-STUB_LLM_HITS="$HITS" python3 scripts/stub-llm.py "127.0.0.1:${STUB_PORT}" >"$WORK/stub.log" 2>&1 &
+STUB_LLM_HITS="$HITS" "$PY" scripts/stub-llm.py "127.0.0.1:${STUB_PORT}" >"$WORK/stub.log" 2>&1 &
 STUB_PID=$!
 : >"$HITS"
 start_server server.log || exit 1
@@ -102,11 +135,11 @@ check "周期接口同样要口令" 401 "$(code "$BASE/v1/periods/now")"
 
 say "记录读写与归属"
 TODAY=$(TZ=UTC-8 date +%F)   # 服务配的是 +08，这里换成同一套日历
-OUT=$(curl -sk -H "X-Access-Key: $KEY" -d '{"body":"给张三写季度总结"}' -w $'\n%{http_code}' "$BASE/v1/notes")
+OUT=$(curl -sk -H "X-Access-Key: $KEY" -d "$(payload '{"body":"给张三写季度总结"}')" -w $'\n%{http_code}' "$BASE/v1/notes")
 check "新建 = 201" 201 "${OUT##*$'\n'}"
-read -r ID WEEK MONTH <<<"$(printf '%s' "${OUT%$'\n'*}" | python3 -c 'import json,sys; n=json.load(sys.stdin); print(n["id"], n["week_start"], n["month_start"])')"
+read -r ID WEEK MONTH <<<"$(printf '%s' "${OUT%$'\n'*}" | "$PY" -c 'import json,sys; n=json.load(sys.stdin); print(n["id"], n["week_start"], n["month_start"])')"
 check "响应带回 id" 1 "$ID"
-python3 - "$WEEK" "$TODAY" <<'EOF' || bad "归属周" "$WEEK / $TODAY"
+"$PY" - "$WEEK" "$TODAY" <<'EOF' || bad "归属周" "$WEEK / $TODAY"
 import sys, datetime
 week, today = (datetime.date.fromisoformat(x) for x in sys.argv[1:3])
 assert week.weekday() == 0, "week_start 不是周一"
@@ -121,23 +154,25 @@ PER=$(get "/v1/periods/now")
 check "接口给的周 = 刚写记录的归属周" "$WEEK" "$(printf '%s' "$PER" | jqp "['week_start']")"
 check "接口给的月 = 刚写记录的归属月" "$MONTH" "$(printf '%s' "$PER" | jqp "['month_start']")"
 check "接口给的周末日 = 该周 +6 天" \
-  "$(python3 -c "import datetime;print((datetime.date.fromisoformat('$WEEK')+datetime.timedelta(days=6)).isoformat())")" \
+  "$("$PY" -c "import datetime;print((datetime.date.fromisoformat('$WEEK')+datetime.timedelta(days=6)).isoformat())")" \
   "$(printf '%s' "$PER" | jqp "['week_end']")"
 
-OUT=$(curl -sk -X PATCH -H "X-Access-Key: $KEY" -d '{"body":"给张三写半年总结"}' -w $'\n%{http_code}' "$BASE/v1/notes/$ID")
+OUT=$(curl -sk -X PATCH -H "X-Access-Key: $KEY" -d "$(payload '{"body":"给张三写半年总结"}')" -w $'\n%{http_code}' "$BASE/v1/notes/$ID")
 check "修改 = 200" 200 "${OUT##*$'\n'}"
 has "改后的正文读得回" "半年" "${OUT%$'\n'*}"
 has "改正文不搬动归属" "\"week_start\":\"$WEEK\"" "${OUT%$'\n'*}"
 
-LONG=$(python3 -c "print('阿'*2001)")
-EXACT=$(python3 -c "print('阿'*2000)")
-check "2001 字 = 413（不静默截断）" 413 "$(code -X POST -H "X-Access-Key: $KEY" -d "{\"body\":\"$LONG\"}" "$BASE/v1/notes")"
-check "恰好 2000 字 = 201" 201 "$(code -X POST -H "X-Access-Key: $KEY" -d "{\"body\":\"$EXACT\"}" "$BASE/v1/notes")"
+# 字符按码点给，不写成字面量：Windows 版 Python 的 argv 同样先过一遍 ANSI 码页，
+# 一个字面量"阿"会被转成两三个字符，"恰好 2000 字"这条就永远测不准了。
+LONG=$("$PY" -c "print(chr(38463)*2001)")
+EXACT=$("$PY" -c "print(chr(38463)*2000)")
+check "2001 字 = 413（不静默截断）" 413 "$(code -X POST -H "X-Access-Key: $KEY" -d "$(payload "{\"body\":\"$LONG\"}")" "$BASE/v1/notes")"
+check "恰好 2000 字 = 201" 201 "$(code -X POST -H "X-Access-Key: $KEY" -d "$(payload "{\"body\":\"$EXACT\"}")" "$BASE/v1/notes")"
 check "空正文 = 400" 400 "$(code -X POST -H "X-Access-Key: $KEY" -d '{"body":"   "}' "$BASE/v1/notes")"
 check "坏 JSON = 400" 400 "$(code -X POST -H "X-Access-Key: $KEY" -d '{' "$BASE/v1/notes")"
 check "非整数 id = 400" 400 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/notes/abc")"
 check "不存在的 id = 404" 404 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/notes/9999")"
-check "搜索命中 = 1 条" 1 "$(curl -sk -H "X-Access-Key: $KEY" "$BASE/v1/notes?q=总结" | jqp "['count']")"
+check "搜索命中 = 1 条" 1 "$(curl -sk -H "X-Access-Key: $KEY" "$BASE/v1/notes?q=$(qenc 总结)" | jqp "['count']")"
 check "q=% 当字面量，不串味" 0 "$(curl -sk -H "X-Access-Key: $KEY" "$BASE/v1/notes?q=%25" | jqp "['count']")"
 check "before 游标生效" 0 "$(curl -sk -H "X-Access-Key: $KEY" "$BASE/v1/notes?before=2000-01-01T00:00:00Z" | jqp "['count']")"
 check "DELETE = 204" 204 "$(code -X DELETE -H "X-Access-Key: $KEY" "$BASE/v1/notes/$ID")"
@@ -151,7 +186,7 @@ infl "日志里有访问记录本身" "path=/v1/notes" "$WORK/server.log"
 [[ -f "$WORK/memora.db" ]] && ok "库文件在配置指定路径" || bad "库文件" "不存在"
 
 say "报表：手动生成进行中的本周（FR-06）"
-curl -sk -X POST -H "X-Access-Key: $KEY" -d '{"body":"本周把报表模块打通"}' "$BASE/v1/notes" >/dev/null
+curl -sk -X POST -H "X-Access-Key: $KEY" -d "$(payload '{"body":"本周把报表模块打通"}')" "$BASE/v1/notes" >/dev/null
 N=$(get "/v1/notes?limit=200" | jqp "['count']")   # 本周实际有几条，冒烟前面故意造了几条边界数据
 START=$(date -u +%s)
 OUT=$(curl -sk -X POST -H "X-Access-Key: $KEY" -w $'\n%{http_code}' "$BASE/v1/reports/week/$WEEK/generate")
@@ -165,11 +200,11 @@ GAP=$((GEND - START))
 [[ $GAP -ge 1 && $GAP -le 5 ]] && ok "generated_at = 模型答完那一刻（发起后 ${GAP}s，不是发起瞬间）" \
   || bad "generated_at 时机" "发起后 ${GAP}s（期望 1–5s，假模型睡 1s）"
 check "单份读得回" ready "$(get "/v1/reports/week/$WEEK" | jqp "['status']")"
-check "报表列表按周期倒序且含 status" ready "$(curl -sk -H "X-Access-Key: $KEY" "$BASE/v1/reports?kind=week" | python3 -c 'import json,sys; print(json.load(sys.stdin)["reports"][0]["status"])')"
+check "报表列表按周期倒序且含 status" ready "$(curl -sk -H "X-Access-Key: $KEY" "$BASE/v1/reports?kind=week" | "$PY" -c 'import json,sys; print(json.load(sys.stdin)["reports"][0]["status"])')"
 check "带口令才有报表数据" 200 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/reports")"
 
 say "报表：参数与错误形状"
-BADWEEK=$(python3 -c "import datetime;print((datetime.date.fromisoformat('$WEEK')+datetime.timedelta(days=1)).isoformat())")
+BADWEEK=$("$PY" -c "import datetime;print((datetime.date.fromisoformat('$WEEK')+datetime.timedelta(days=1)).isoformat())")
 H0=$(hits)
 check "非周一的周报起始日 = 400 bad_period" 400 "$(code -X POST -H "X-Access-Key: $KEY" "$BASE/v1/reports/week/$BADWEEK/generate")"
 check "非 1 号的月报起始日 = 400" 400 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/reports/month/${TODAY%-*}-15")"
@@ -180,30 +215,102 @@ check "空周期生成 = 409 no_records" 409 "$(code -X POST -H "X-Access-Key: $
 check "没生成过的周期 = 404" 404 "$(code -H "X-Access-Key: $KEY" "$BASE/v1/reports/week/2020-01-06")"
 has "404 带 not_generated 码" "not_generated" "$(get "/v1/reports/week/2020-01-06")"
 
+say "待办：队首插入、拖拽整列提交、勾掉与取消（FR-09/FR-10）"
+# 顺序、名次、归属都从接口现读，不在 shell 里算日期：那正是客户端不许自己算周一的理由。
+tbodies() { get "/v1/tasks" | "$PY" -c 'import json,sys; print(",".join(t["body"] for t in json.load(sys.stdin)["tasks"]))'; }
+tranks()  { get "/v1/tasks" | "$PY" -c 'import json,sys; print(",".join(str(t["rank"]) for t in json.load(sys.stdin)["tasks"] if not t["done"]))'; }
+tid()     { get "/v1/tasks" | "$PY" -c "import json,sys; print(json.load(sys.stdin)['tasks'][$1]['id'])"; }
+tweek()   { get "/v1/tasks" | "$PY" -c "import json,sys; print([t for t in json.load(sys.stdin)['tasks'] if t['id']==$1][0]['done_week_start'])"; }
+
+check "待办接口同样要口令" 401 "$(code "$BASE/v1/tasks")"
+for B in 约评审 买猫粮 修漏水; do
+  curl -sk -X POST -H "X-Access-Key: $KEY" -d "$(payload "{\"body\":\"记着$B\"}")" "$BASE/v1/tasks" >/dev/null
+done
+check "新建插到队首，读出来是提交顺序的倒序" "记着修漏水,记着买猫粮,记着约评审" "$(tbodies)"
+check "未完成名次连续无空洞" "1,2,3" "$(tranks)"
+check "超限的待办正文 = 413，不静默截断" 413 "$(code -X POST -H "X-Access-Key: $KEY" -d "$(payload "{\"body\":\"$LONG\"}")" "$BASE/v1/tasks")"
+check "空 PATCH = 400" 400 "$(code -X PATCH -H "X-Access-Key: $KEY" -d '{}' "$BASE/v1/tasks/1")"
+
+MID=$(tid 1)
+IDS=$(get "/v1/tasks" | "$PY" -c 'import json,sys; print(",".join(str(t["id"]) for t in json.load(sys.stdin)["tasks"] if not t["done"]))')
+STALE=$("$PY" -c "print('[' + ','.join(reversed('$IDS'.split(','))) + ']')")
+check "整列重排 = 200，顺序就是提交的那个" "记着约评审,记着买猫粮,记着修漏水" \
+  "$(curl -sk -X POST -H "X-Access-Key: $KEY" -d "{\"ids\":$STALE}" "$BASE/v1/tasks/reorder" >/dev/null; tbodies)"
+check "名次跟着重排走" "1,2,3" "$(tranks)"
+BAD=$(printf '[%s]' "$(cut -d, -f1-2 <<<"$IDS")")
+check "漏一条的重排 = 400" 400 "$(code -X POST -H "X-Access-Key: $KEY" -d "{\"ids\":$BAD}" "$BASE/v1/tasks/reorder")"
+has "被拒时说要刷新后重拖" "刷新后重拖" "$(curl -sk -X POST -H "X-Access-Key: $KEY" -d "{\"ids\":$BAD}" "$BASE/v1/tasks/reorder")"
+check "被拒的那次一点没生效" "记着约评审,记着买猫粮,记着修漏水" "$(tbodies)"
+
+check "勾掉 = 200" 200 "$(code -X PATCH -H "X-Access-Key: $KEY" -d '{"done":true}' "$BASE/v1/tasks/$MID")"
+check "勾掉的沉到已完成区" "记着约评审,记着修漏水,记着买猫粮" "$(tbodies)"
+check "勾掉之后前面的名次收紧" "1,2" "$(tranks)"
+check "勾掉那一刻盖上归属周" "$WEEK" "$(tweek "$MID")"
+check "取消勾选 = 200" 200 "$(code -X PATCH -H "X-Access-Key: $KEY" -d '{"done":false}' "$BASE/v1/tasks/$MID")"
+check "取消之后落到未完成队尾" "记着约评审,记着修漏水,记着买猫粮" "$(tbodies)"
+check "取消之后归属列清空（报表不再认它）" "" "$(tweek "$MID")"
+check "重复勾同一条不改写归属" "$WEEK" \
+  "$(curl -sk -X PATCH -H "X-Access-Key: $KEY" -d '{"done":true}' "$BASE/v1/tasks/$MID" >/dev/null; tweek "$MID")"
+
+DROP=$(curl -sk -X POST -H "X-Access-Key: $KEY" -d "$(payload '{"body":"这条是用来删的"}')" "$BASE/v1/tasks" | jqp "['id']")
+check "删除 = 204" 204 "$(code -X DELETE -H "X-Access-Key: $KEY" "$BASE/v1/tasks/$DROP")"
+check "重复删除 = 404" 404 "$(code -X DELETE -H "X-Access-Key: $KEY" "$BASE/v1/tasks/$DROP")"
+
+say "待办进报表：勾掉的算这一期，没勾掉的不算（FR-11）"
+# 再勾一条，让这一周既有记录又有勾掉的待办；第三条留着不勾，它一个字都不该进提示词。
+curl -sk -X PATCH -H "X-Access-Key: $KEY" -d '{"done":true}' "$BASE/v1/tasks/$(tid 0)" >/dev/null
+N2=$(get "/v1/notes?limit=200" | jqp "['count']")
+T2=$(get "/v1/tasks" | "$PY" -c 'import json,sys; print(sum(1 for t in json.load(sys.stdin)["tasks"] if t["done"]))')
+: >"$HITS"
+OUT=$(curl -sk -X POST -H "X-Access-Key: $KEY" -w $'\n%{http_code}' "$BASE/v1/reports/week/$WEEK/generate")
+BODY=${OUT%$'\n'*}
+check "生成 = 200" 200 "${OUT##*$'\n'}"
+check "source_count = 记录数 + 勾掉的待办数" "$((N2 + T2))" "$(printf '%s' "$BODY" | jqp "['source_count']")"
+has "喂给模型的素材行数跟着一起涨" "收到 $((N2 + T2)) 条记录" "$BODY"
+infl "待办单独成段，不跟记录混排" "本周期内已勾掉的待办" "$HITS"
+infl "勾掉的正文真的进了提示词" "记着约评审" "$HITS"
+grep -qF -- "记着修漏水" "$HITS" && bad "没勾掉的待办混进了提示词" "$(grep -m1 记着修漏水 "$HITS")" \
+  || ok "没勾掉的待办一个字都不出现（FR-11）"
+
 say "报表：已结束的周期——失败要留得下来（FR-05 不静默缺失）"
 # 把那条记录搬进上一个完整周：归属列是插入时算好的，这里直接改库模拟"上一周记的事"，
 # 好让补跑判据（周期已结束 + 没有 ready）在冒烟里有东西可判。
-PREV=$(python3 -c "import datetime;print((datetime.date.fromisoformat('$WEEK')-datetime.timedelta(days=7)).isoformat())")
+PREV=$("$PY" -c "import datetime;print((datetime.date.fromisoformat('$WEEK')-datetime.timedelta(days=7)).isoformat())")
 PREVMONTH=${PREV%-*}-01
 # 直接插一条属于上一周的记录：归属列本该由服务端在插入那一刻算好，但冒烟要的是
 # "一个已结束的周期"，而今天永远落在当前周里，等不到上一个周期自己结束。
 stop_server
-sqlite3 "$WORK/memora.db" "
+# 用 Python 的标准库改库而不是 sqlite3 命令行：Windows 那台机器上没装 CLI，
+# 而这一笔是补跑用例的前提，缺了它整段"已结束的周期"就没东西可判。
+"$PY" - "$WORK/memora.db" "$PREV" "$PREVMONTH" <<'EOF'
+import sqlite3, sys
+db, prev, prevmonth = sys.argv[1:4]
+con = sqlite3.connect(db)
+con.executescript(f"""
 DELETE FROM notes;
 DELETE FROM reports;
 INSERT INTO notes (id, body, created_at, updated_at, week_start, month_start)
-VALUES (900, '上周留在库里的一条', '${PREV}T01:00:00.000Z', '${PREV}T01:00:00.000Z', '$PREV', '$PREVMONTH');"
+VALUES (900, '上周留在库里的一条', '{prev}T01:00:00.000Z', '{prev}T01:00:00.000Z', '{prev}', '{prevmonth}');
+""")
+con.commit()
+con.close()
+EOF
+# key 在起服务之前就换错。留着好 key 起这一次，启动即跑的补例会先把上一周补成 ready，
+# 下面"失败要留得下来"读到的就是那份成功的报表——能不能撞上，取决于本机那两次 curl
+# 有没有熬过假模型的 1s 延迟。Linux 上碰巧赢了这个竞态，Windows 上必输。
+sed -i "s/^MEMORA_LLM_API_KEY=.*/MEMORA_LLM_API_KEY=故意写错的key/" "$ENV"
 start_server server-prev.log || exit 1
 check "已结束周期的记录读得回" "$PREV" "$(get "/v1/notes/900" | jqp "['week_start']")"
-check "它确实落在过去的一周" 1 "$(python3 -c "import datetime;print(int(datetime.date.fromisoformat('$PREV') < datetime.date.fromisoformat('$TODAY')))")"
+check "它确实落在过去的一周" 1 "$("$PY" -c "import datetime;print(int(datetime.date.fromisoformat('$PREV') < datetime.date.fromisoformat('$TODAY')))")"
 
+# 补跑是启动时另起的协程，坏 key 下模型立刻回 401（假延迟在鉴权之后），但落库仍要等它跑完，
+# 所以轮询而不是拍一个固定 sleep。第一轮没生成成功前读它是 404，把 jqp 的报错咽掉。
+for _ in $(seq 40); do
+  [[ "$(get "/v1/reports/week/$PREV" | jqp "['status']" 2>/dev/null)" == failed ]] && break
+  sleep 0.25
+done
+check "坏 key 下补跑没造出报表，但把失败留进了库" failed "$(get "/v1/reports/week/$PREV" | jqp "['status']")"
 : >"$HITS"
-sed -i "s/^MEMORA_LLM_API_KEY=.*/MEMORA_LLM_API_KEY=故意写错的key/" "$ENV"
-stop_server; start_server server-badkey.log || exit 1
-# 起来的这一轮补跑也会撞同一个坏 key，先让它跑完，再把计数清零，
-# 这样下面那 2 次调用只对应这一次手动生成。
-sleep 4; : >"$HITS"
-check "坏 key 下补跑也没把报表悄悄造出来" failed "$(get "/v1/reports/week/$PREV" | jqp "['status']")"
 check "key 不对时生成 = 502" 502 "$(code -X POST -H "X-Access-Key: $KEY" "$BASE/v1/reports/week/$PREV/generate")"
 BODY=$(get "/v1/reports/week/$PREV")
 has "失败报表读得回且状态 failed" '"status":"failed"' "$BODY"
@@ -216,7 +323,7 @@ sed -i "s/^MEMORA_LLM_API_KEY=.*/MEMORA_LLM_API_KEY=$STUB_KEY/" "$ENV"
 : >"$HITS"
 start_server server-backfill.log || exit 1
 # 上一周所属的那个月可能也结束了（月初那几天必然如此），那样月报同样是待补项。
-EXPECTED=$(python3 -c "
+EXPECTED=$("$PY" -c "
 import datetime
 prev = datetime.date.fromisoformat('$PREV')
 today = datetime.date.fromisoformat('$TODAY')
@@ -242,7 +349,9 @@ say "限速：连续失败到阈值后，口令对了也不给过"
 for _ in 1 2 3 4 5; do code -H 'X-Access-Key: 故意错' "$BASE/v1/notes" >/dev/null; done
 check "第 6 次仍错 = 429" 429 "$(code -H 'X-Access-Key: 故意错' "$BASE/v1/notes")"
 HEAD=$(curl -sk -D - -o /dev/null -H "X-Access-Key: $KEY" "$BASE/v1/notes" | tr -d '\r' | tr 'A-Z' 'a-z')
-has "锁定期间口令对也吃 429" "http/2 429" "$HEAD"
+# 状态行按协议版本写死会挑环境：Windows 那份 curl 没编 HTTP/2，回的是 http/1.1。
+# 这条要钉的是"锁定期间口令对也吃 429"，与协商到哪个版本无关。
+has "锁定期间口令对也吃 429" " 429" "$HEAD"
 has "带上 Retry-After" "retry-after" "$HEAD"
 check "healthz 不受限速影响" 200 "$(code "$BASE/healthz")"
 
