@@ -110,7 +110,7 @@ func (s *Scheduler) generateAll(ctx context.Context, kind Kind, ids []string, ou
 			s.log.Info("补跑生成", "kind", string(kind), "period", id,
 				"sources", derefCount(res.SourceCount))
 		case errors.Is(err, ErrNoRecords):
-			// 候选来自记录本身，走到这里只可能是记录刚被删掉。
+			// 候选来自素材本身，走到这里只可能是记录或待办刚被删掉。
 			out.skipped++
 		default:
 			out.failed++
@@ -164,10 +164,57 @@ func (s *Scheduler) periodEnded(kind Kind, id string, now time.Time) bool {
 }
 
 func (s *Scheduler) finishedPeriods(ctx context.Context, kind Kind) ([]string, error) {
+	// 候选来自两路：记过笔记的周期，和勾掉过待办的周期。只靠前者会漏掉"这周啥也没记、
+	// 但勾掉了三件事"那一周——而那一周的报表恰恰最该自动生成（FR-05 不静默缺失）。
+	var fromNotes, fromTasks []string
+	var err error
 	if kind == Week {
-		return s.st.DistinctWeekStarts(ctx)
+		fromNotes, err = s.st.DistinctWeekStarts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fromTasks, err = s.st.DistinctDoneWeekStarts(ctx)
+	} else {
+		fromNotes, err = s.st.DistinctMonthStarts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fromTasks, err = s.st.DistinctDoneMonthStarts(ctx)
 	}
-	return s.st.DistinctMonthStarts(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return mergeDesc(fromNotes, fromTasks), nil
+}
+
+// mergeDesc 把两段各自倒序的周期 id 合成一段倒序去重的列表。
+// 顺序有意义：一轮最多补 maxPerSweep 份，排在前面的先拿到。
+func mergeDesc(a, b []string) []string {
+	seen := make(map[string]bool, len(a)+len(b))
+	out := make([]string, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if a[i] >= b[j] {
+			out, i = appendUnique(out, seen, a[i]), i+1
+		} else {
+			out, j = appendUnique(out, seen, b[j]), j+1
+		}
+	}
+	for ; i < len(a); i++ {
+		out = appendUnique(out, seen, a[i])
+	}
+	for ; j < len(b); j++ {
+		out = appendUnique(out, seen, b[j])
+	}
+	return out
+}
+
+func appendUnique(out []string, seen map[string]bool, id string) []string {
+	if seen[id] {
+		return out
+	}
+	seen[id] = true
+	return append(out, id)
 }
 
 func (s *Scheduler) isReady(ctx context.Context, kind Kind, id string) (bool, error) {

@@ -101,10 +101,10 @@ func TestGenerateSuccess(t *testing.T) {
 	}
 
 	// 提示词三件事：规则正文、两条原文都在、条数写明。
-	if !strings.Contains(g.prompt, "只准使用给你的笔记内容") {
+	if !strings.Contains(g.prompt, "只准使用给你的素材内容") {
 		t.Error("嵌入的提示词没读进来")
 	}
-	for _, want := range []string{"开始写报表模块的提示词", "报表切片跑通了本机冒烟", "共 2 条记录"} {
+	for _, want := range []string{"开始写报表模块的提示词", "报表切片跑通了本机冒烟", "共 2 条素材"} {
 		if !strings.Contains(fake(g).user, want) {
 			t.Errorf("用户提示词缺 %q:\n%s", want, fake(g).user)
 		}
@@ -117,8 +117,83 @@ func TestGenerateSuccess(t *testing.T) {
 	}
 }
 
-func TestGenerateFailureLandsFailed(t *testing.T) {
+// seedTask 建一条待办；doneAt 非零就顺手勾掉，归属按勾掉那一刻算。
+func seedTask(t *testing.T, st *store.Store, body string, at, doneAt time.Time) store.Task {
+	t.Helper()
+	ctx := context.Background()
+	task, err := st.CreateTask(ctx, body, at)
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if doneAt.IsZero() {
+		return task
+	}
+	done, err := st.SetTaskDone(ctx, task.ID, true, doneAt,
+		period.WeekStartID(doneAt, plus8), period.MonthStartID(doneAt, plus8))
+	if err != nil {
+		t.Fatalf("SetTaskDone: %v", err)
+	}
+	return done
+}
+
+func TestCompletedTaskJoinsThePromptAsItsOwnSection(t *testing.T) {
 	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
+	llm := &fakeCompleter{}
+	g, st := newTestGenerator(t, llm, &now)
+
+	seed(t, st, "随手记的一条想法", now.Add(-3*time.Hour))
+	seedTask(t, st, "联调完待办接口", now.Add(-2*time.Hour), now.Add(-time.Hour))
+	// 没勾掉的那条不代表任何交付，一个字都不该出现在提示词里（FR-11）。
+	seedTask(t, st, "下周再说的备份脚本", now.Add(-time.Hour), time.Time{})
+
+	rep, err := g.Generate(context.Background(), Week, "2026-11-23")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	// source_count 是喂给模型的素材条数：1 条记录 + 1 条已完成待办，未完成那条不计。
+	if rep.Status != store.StatusReady || *rep.SourceCount != 2 {
+		t.Fatalf("报表 = %s / %v 条, 期望 ready 且 2", rep.Status, *rep.SourceCount)
+	}
+
+	user := fake(g).user
+	if !strings.Contains(user, "联调完待办接口") {
+		t.Errorf("已完成待办没进提示词:\n%s", user)
+	}
+	if strings.Contains(user, "下周再说的备份脚本") {
+		t.Errorf("未完成的待办混进了提示词:\n%s", user)
+	}
+	// 分段而不是混排：模型要靠分段知道"哪条是勾掉的、哪条只是当时想到的"（ADR-0014）。
+	noteAt := strings.Index(user, "想法记录按时间升序")
+	taskAt := strings.Index(user, "本周期内已勾掉的待办")
+	if noteAt < 0 || taskAt < 0 || noteAt > taskAt {
+		t.Errorf("两段素材缺失或顺序颠倒: note=%d task=%d\n%s", noteAt, taskAt, user)
+	}
+	if !strings.Contains(user, "1 条已完成待办") {
+		t.Errorf("条数没拆成两路报:\n%s", user)
+	}
+}
+
+func TestOnlyTasksStillGenerates(t *testing.T) {
+	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
+	llm := &fakeCompleter{}
+	g, st := newTestGenerator(t, llm, &now)
+
+	seedTask(t, st, "把这周该交付的东西清掉", now.Add(-4*time.Hour), now.Add(-time.Hour))
+
+	rep, err := g.Generate(context.Background(), Week, "2026-11-23")
+	if err != nil {
+		t.Fatalf("一条笔记都没记、只勾掉一条待办的周期也该出报: %v", err)
+	}
+	if *rep.SourceCount != 1 {
+		t.Errorf("source_count = %d, 期望 1", *rep.SourceCount)
+	}
+	// 记录那一节要显式落成"（无）"，不能整个空着——空着模型会以为格式坏了。
+	if !strings.Contains(fake(g).user, "（无）") {
+		t.Errorf("空的记录段没有占位:\n%s", fake(g).user)
+	}
+}
+
+func TestGenerateFailureLandsFailed(t *testing.T) {	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
 	boom := errors.New("模型接口 HTTP 503")
 	llm := &fakeCompleter{errs: []error{boom, boom}}
 	g, st := newTestGenerator(t, llm, &now)

@@ -197,3 +197,43 @@ func TestSweepCapsPerRound(t *testing.T) {
 		t.Errorf("最新周期 %s 没被补上: %v %+v", ids[0], err, latest)
 	}
 }
+
+// 只勾掉过待办、一条笔记没记的那一周也必须进候选：漏掉它正是 FR-05 说的静默缺失。
+// 候选来源从一路变两路之后，这条是那个并集唯一被盯着的地方。
+func TestTaskOnlyWeekEntersBackfillCandidates(t *testing.T) {
+	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
+	llm := &fakeCompleter{}
+	g, st := newTestGenerator(t, llm, &now)
+	ctx := context.Background()
+
+	// 上周（2026-11-16）里勾掉一条待办，那一周一条记录都没有。
+	lastWeek := now.AddDate(0, 0, -8)
+	seedTask(t, st, "上周清掉的待办", lastWeek.Add(-time.Hour), lastWeek)
+	// 本周（未结束）里也勾掉一条，它不该进候选。
+	seedTask(t, st, "本周就做完的", now.Add(-time.Hour), now)
+
+	got, err := newTestScheduler(g, st).missingPeriods(ctx, Week, now)
+	if err != nil {
+		t.Fatalf("missingPeriods: %v", err)
+	}
+	if len(got) != 1 || got[0] != "2026-11-16" {
+		t.Errorf("待办撑起来的候选 = %v, 期望只有 [2026-11-16]", got)
+	}
+}
+
+func TestMergeDescUnionsTwoCandidateSources(t *testing.T) {
+	notes := []string{"2026-11-16", "2026-11-02"}
+	tasks := []string{"2026-11-23", "2026-11-16"}
+
+	got := mergeDesc(notes, tasks)
+	want := []string{"2026-11-23", "2026-11-16", "2026-11-02"}
+	if len(got) != len(want) {
+		t.Fatalf("合并结果 = %v, 期望 %v", got, want)
+	}
+	for i := range want {
+		// 两路共有的 2026-11-16 只出现一次，整体保持由新到旧。
+		if got[i] != want[i] {
+			t.Fatalf("第 %d 位 = %s, 期望 %s（整个列表 %v）", i, got[i], want[i], got)
+		}
+	}
+}

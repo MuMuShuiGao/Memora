@@ -99,10 +99,17 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 	if err != nil {
 		return store.Report{}, err
 	}
-	if len(notes) == 0 {
+	// 待办按"什么时候勾掉"归属，和记录按创建时间归属是两条独立的路（design §2）。
+	// 两路都为空才判"这个周期没东西"：只勾掉待办、一条笔记没记的一周，那几条恰恰就是
+	// 本周的交付，不能因为没有笔记就不出报（design §6 1.2）。
+	tasks, err := g.tasksIn(ctx, kind, periodStart)
+	if err != nil {
+		return store.Report{}, err
+	}
+	if len(notes) == 0 && len(tasks) == 0 {
 		return store.Report{}, ErrNoRecords
 	}
-	// 截止时刻取"读完记录的那一刻"：手动生成未结束的周期时，这就是 design §2
+	// 截止时刻取"读完素材的那一刻"：手动生成未结束的周期时，这就是 design §2
 	// 说的实际截止，之后新记的东西归下一次生成。
 	cutoff := g.now()
 
@@ -110,7 +117,8 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 		return store.Report{}, err
 	}
 
-	userPrompt := g.buildUserPrompt(kind, periodStart, periodEnd, notes)
+	userPrompt := g.buildUserPrompt(kind, periodStart, periodEnd, notes, tasks)
+	sources := len(notes) + len(tasks)
 
 	// 60s 是"这一次生成"的总预算，覆盖所有尝试。每次调用重新计时的话，
 	// "重试一次"实际会变成"最多 120s"，手动生成那个同步请求就等得没道理了。
@@ -142,11 +150,12 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 			// 前者标结果何时可用。混用一个时刻会让一次 40s 的生成看起来在 0s 就完成了。
 			at := g.now()
 			ready, ferr := g.st.FinishRun(doneCtx, string(kind), periodStart, store.StatusReady,
-				text, len(notes), "", at, at)
+				text, sources, "", at, at)
 			if ferr != nil {
 				return store.Report{}, ferr
 			}
-			g.log.Info("报表生成完成", "kind", string(kind), "period", periodStart, "sources", len(notes))
+			g.log.Info("报表生成完成", "kind", string(kind), "period", periodStart,
+				"notes", len(notes), "tasks", len(tasks), "sources", sources)
 			return ready, nil
 		}
 
@@ -195,21 +204,45 @@ func (g *Generator) notesIn(ctx context.Context, kind Kind, periodStart string) 
 	return g.st.NotesForMonth(ctx, periodStart)
 }
 
-// buildUserPrompt 按时间升序列出记录，每行前缀本地日期。给日期是为了让模型分得清
+func (g *Generator) tasksIn(ctx context.Context, kind Kind, periodStart string) ([]store.Task, error) {
+	if kind == Week {
+		return g.st.TasksDoneForWeek(ctx, periodStart)
+	}
+	return g.st.TasksDoneForMonth(ctx, periodStart)
+}
+
+// buildUserPrompt 按时间升序列出素材，每行前缀本地日期。给日期是为了让模型分得清
 // "同一件事被记了两次"和"两个不同周期的同名事项"；它不许凭日期编造内容，那条写在提示词里。
-func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.Note) string {
+//
+// 两路素材分成两段、各自标出语义，不混成一段流水：记录是"当时想到的"，勾掉的待办是
+// "确实做完了的"。混起来模型就分不开这两件事，而需求 §5 第 4 条要求正文不得出现素材里
+// 没有的事实——来源糊掉之后那条约束连核查的抓手都没有（ADR-0014）。
+func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.Note, tasks []store.Task) string {
 	kindName := "周报"
 	if kind == Month {
 		kindName = "月报"
 	}
 
 	var b strings.Builder
-	fmt.Fprintf(&b, "请生成 %s 覆盖的自然周期：%s 至 %s（含两端，按 %s 的日历）。\n\n",
-		kindName, start, end, g.loc)
-	b.WriteString("记录按时间升序，每行一条，方括号内是记录日期：\n\n")
+	fmt.Fprintf(&b, "请生成 %s 覆盖的自然周期：%s 至 %s（含两端，按 %s 的日历）。\n", kindName, start, end, g.loc)
+	b.WriteString("下面两类素材彼此独立：一类是随手记下的想法，一类是在这个周期内勾掉的待办。\n")
+
+	b.WriteString("\n想法记录按时间升序，每行一条，方括号内是记录日期：\n\n")
+	if len(notes) == 0 {
+		b.WriteString("（无）\n")
+	}
 	for _, n := range notes {
 		fmt.Fprintf(&b, "[%s] %s\n", n.CreatedAt.In(g.loc).Format("2006-01-02"), n.Body)
 	}
-	fmt.Fprintf(&b, "\n共 %d 条记录。", len(notes))
+
+	b.WriteString("\n本周期内已勾掉的待办，按完成时间升序，方括号内是完成日期：\n\n")
+	if len(tasks) == 0 {
+		b.WriteString("（无）\n")
+	}
+	for _, t := range tasks {
+		fmt.Fprintf(&b, "[%s] %s\n", t.DoneAt.In(g.loc).Format("2006-01-02"), t.Body)
+	}
+
+	fmt.Fprintf(&b, "\n共 %d 条素材：%d 条记录 + %d 条已完成待办。", len(notes)+len(tasks), len(notes), len(tasks))
 	return b.String()
 }
