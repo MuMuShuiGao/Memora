@@ -2,7 +2,7 @@
 
 > 状态：生效中
 > 摘要：当前进度快照与断点，新会话从这里接上
-> 更新：2026-11-26 17:50
+> 更新：2026-11-26 17:58
 
 这份文件只描述**现在**。已完成的历史进 ADR 或对应设计文档，卡了两周以上的事项应该转成 ADR 或 refactor 方案，不要赖在这里。上限 60 行。
 
@@ -10,7 +10,7 @@
 
 - **服务端写完并可验收**：`cmd/memora`（`serve` / `hashpass` / `version`）+ 六块 internal（config / auth / store / period / report / api）。零 web 框架；直接依赖只有纯 Go 的 SQLite 驱动和 bcrypt，`CGO_ENABLED=0` 单二进制成立（ADR-0006）。本轮按 [ADR-0014](decisions/0014-todo-tasks-with-priority.md) 加了第二类对象：`tasks` 表 + `/v1/tasks` 五条接口，报表取数变成两路（记录按创建归属，待办按 `done_at` 归属，未勾掉的一条不进）。
 - 验证腿**都是实测绿的**：`go vet` 干净；`go test` 全过，**59 个测试**（period 7、store 12、report 18、api 22）；`scripts/smoke.sh` **96 项全过**——本机起 HTTPS + 假模型跑端到端，覆盖口令边界（FR-07）、归属算法、正文上限、报表生成与失败留痕（FR-05）、进行中周期出报（FR-06）、重启补跑、限速 429，以及待办的队首插入 / 整列重排 / 勾掉盖归属 / 未勾掉不进提示词（FR-09~FR-11）。**这 96 项现在在需求方 Windows 本机跑通**，之前只在 Linux 上跑过。
-- **安卓工程在需求方 Windows 上编译与实跑都通**（`localDebug` 全绿，APK 9.8 MiB）：`android/` 下 15 个 Kotlin 文件 + Gradle 脚手架（AGP 8.7.3 / Kotlin 2.0.21 / Compose BOM 2024.12.01，两个 flavor）。`serverDebug` 停在缺证书那一步，报 `raw/memora_server_cert not found`——按设计该是编译期失败，实测确实是。视觉是「编辑部案头」（[ADR-0013](decisions/0013-editorial-desk-visual.md)）。本轮新加的待办屏在模拟器逐条点过：录入、勾选沉底、前五/展开、拖把手调序后点刷新顺序仍在、报表里"用了 3 条记录"=2 记录 + 1 条本周勾掉的待办。
+- **安卓工程在需求方 Windows 上编译与实跑都通**（`localDebug` 全绿，APK 9.8 MiB）：`android/` 下 15 个 Kotlin 文件 + Gradle 脚手架（AGP 8.7.3 / Kotlin 2.0.21 / Compose BOM 2024.12.01，两个 flavor）。`serverDebug` 停在缺证书那一步，报 `raw/memora_server_cert not found`——按设计该是编译期失败，实测确实是。视觉是「编辑部案头」（[ADR-0013](decisions/0013-editorial-desk-visual.md)）。本轮新加的待办屏在模拟器逐条点过：录入、勾选沉底、前五/展开、拖把手调序后点刷新顺序仍在、报表里"用了 3 条记录"=2 记录 + 1 条本周勾掉的待办。主屏页签现为「待办 → 记录 → 报表」，打开默认落在待办（`App.kt` 的初始 `tab` 与 `Masthead`）；`localDebug` 重编译通过，模拟器装上实看过默认落待办、点「记录」能切换（本轮服务端未起，只验了页签与切换，没验数据）。
 - AS 的 Gradle sync 也通：Gradle 本体走华为云镜像（[ADR-0011](decisions/0011-build-mirror-and-gradle-jvm.md)），JVM 靠**在 AS 里手点 Gradle JDK = `ms-17.0.14`**；这个选择落在被 ignore 的 `.idea/gradle.xml`，**别人 clone 后第一次 sync 仍要手点**（写进 `android/README.md`），结论见 [ADR-0012](decisions/0012-ide-and-cli-gradle-jvm.md)。
 - systemd 服务没装过（`deploy/memora.service` 只是文件）。
 - **远端是需求方的公开 GitHub 仓库**（账号与地址不入档，§9），凭据是那把仓库专用 deploy key（已开写权限），私钥只在 `~/.ssh` 下、权限 600。`main` 上是"服务端首版 → 安卓端 → 文档脱敏"一串快进提交，没强推过、没改写历史。要看地址跑 `git remote -v`。
@@ -36,7 +36,7 @@
 
 - 新建 `decisions/0014-todo-tasks-with-priority.md`：待办独立成表，否掉"复用 notes 加两列"、"分数排序"、"待办只存本地"、"第三方拖拽库"四条；`projectneed.md` §2 那句"不做：待办勾选、完成状态"随之改掉。
 - `design/memo-and-report.md`：`tasks` 表结构、`/v1/tasks` 五条接口、报表两路取数与 `source_count` 的新口径；`design/android-client.md`：待办屏五条定论（前五 + 折叠 + 把手拖拽整列提交 + 回车即加）与视觉，验收段按本轮模拟器实跑更新；`INDEX.md` 补 0014。
-- 代码侧新增：`internal/store/tasks.go`、`internal/api/tasks.go`、`internal/report/generate.go` 两路素材、`android/.../TasksScreen.kt`（手写竖直拖拽，拖动期间不改列表只做视觉位移）、`MemoApi.kt` / `Models.kt` / `App.kt` 第三个 tab、`Components.kt` 的 `UnderlineField(onSubmit=…)`。
+- 代码侧新增：`internal/store/tasks.go`、`internal/api/tasks.go`、`internal/report/generate.go` 两路素材、`android/.../TasksScreen.kt`（手写竖直拖拽，拖动期间不改列表只做视觉位移）、`MemoApi.kt` / `Models.kt` / `App.kt` 第三个 tab（现列第一个、默认落点）、`Components.kt` 的 `UnderlineField(onSubmit=…)`。
 - `scripts/smoke.sh` 补 26 项待办断言，并把它移植到 Windows 本机跑通：Python 解释器按"能不能真跑"挑（`python3` 可能是应用商店占位符）、`WORK` 经 `cygpath -m` 转换、签证书那一步加 `MSYS_NO_PATHCONV=1`、改库从 `sqlite3` CLI 换成标准库。
 - 移植过程中撞出**两个脚本自身的错**，都不是产品坏了：① 中文载荷被码页改写（见"断点说明"）；② "坏 key 下补跑留下 failed"那项一直在跟启动补跑抢时间——好 key 那一轮会先把上一周补成 ready，Linux 上 curl 快、恰好抢在前，Windows 上必输。改成起服务之前就换坏 key + 轮询等失败落库。
 

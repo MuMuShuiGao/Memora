@@ -84,7 +84,7 @@ fun AppRoot(local: LocalStore, credentials: CredentialStore) {
 
 @Composable
 private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () -> Unit) {
-    var tab by rememberSaveable { mutableStateOf(TAB_NOTES) }
+    var tab by rememberSaveable { mutableStateOf(TAB_TASKS) }
     var editing by remember { mutableStateOf<Editing?>(null) }
 
     val target = editing
@@ -130,8 +130,8 @@ private fun Masthead(tab: String, onTab: (String) -> Unit, onSettings: () -> Uni
         }
         SectionRule(Modifier.padding(top = 8.dp))
         Row(Modifier.padding(horizontal = 20.dp), Arrangement.spacedBy(24.dp)) {
-            UnderlineTab("记录", tab == TAB_NOTES) { onTab(TAB_NOTES) }
             UnderlineTab("待办", tab == TAB_TASKS) { onTab(TAB_TASKS) }
+            UnderlineTab("记录", tab == TAB_NOTES) { onTab(TAB_NOTES) }
             UnderlineTab("报表", tab == TAB_REPORTS) { onTab(TAB_REPORTS) }
         }
     }
