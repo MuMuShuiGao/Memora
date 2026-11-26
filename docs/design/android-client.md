@@ -2,8 +2,8 @@
 
 > 状态：生效中
 > 摘要：手机端界面划分、本地只存哪四样、九个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0005](../decisions/0005-no-redaction-in-app.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0010](../decisions/0010-minimal-android-deps.md)；接口契约见 [memo-and-report.md](memo-and-report.md)
-> 更新：2026-11-26（与 `android/` 里的第一版代码对齐；构建步骤见仓库 `android/README.md`）
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0005](../decisions/0005-no-redaction-in-app.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0010](../decisions/0010-minimal-android-deps.md)、[0013](../decisions/0013-editorial-desk-visual.md)；接口契约见 [memo-and-report.md](memo-and-report.md)
+> 更新：2026-11-26（视觉重写「编辑部案头」并装机点过全路径；构建步骤见仓库 `android/README.md`）
 
 ## 目标与非目标
 
@@ -50,18 +50,37 @@ ADR-0008 说界面三块（列表、录入、报表）。这里有四屏：口�
 
 | 屏 | 内容 | 什么时候出现 |
 | --- | --- | --- |
-| 连接 | 地址、口令、"测试并保存"（拿一次 `periods/now` 当验收）、"只保存，先不测" | 没配过时；之后只在 401 时回来 |
-| 记录 | 最新在前、关键词过滤（`q`）、刷新按钮、点条目进编辑、"记一条"按钮 | 主屏第一个 tab |
+| 连接 | 地址、口令、"测试并保存"（拿一次 `periods/now` 当验收）、"只保存，先不测"；做成封面页 | 没配过时；之后只在 401 时回来 |
+| 记录 | 最新在前、关键词过滤（`q`）、刷新、点条目进编辑、底部固定"记一条" | 主屏第一个 tab |
 | 编辑 | 多行输入、`n/上限` 计数、保存；已有条目带删除（连点两次才删） | 新建与修改共用一屏，整块替换主屏 |
-| 报表 | 周/月切换、周期列表（含 `status`）、单份正文、生成按钮、复制到剪贴板 | 第二个 tab |
+| 报表 | 周/月切换、周期列表（含 `status`）、单份正文、生成按钮、复制到剪贴板（复制后有确认反馈） | 第二个 tab |
 
-顶栏第三个入口是"改口令 / 改地址"：清掉 KeyStore 里的口令与别名，回到连接页。401 走的是同一条路。
+报头右侧是"改口令 / 改地址"：清掉 KeyStore 里的口令与别名，回到连接页。401 走的是同一条路。
 
 三条交互定论，不是建议：
 
 1. **生成按钮点了就转圈到接口返回**。服务端是同步生成（ADR-0004），一次可能要 60s 预算加一次重试；客户端造一个假进度或轮询状态，只会把"服务端正在等模型"这件事藏起来。
 2. **进行中的本周/本月也能点生成**（FR-06），界面显示服务端给的 `source_count` 与 `generated_at`，不自己算"截至哪天"。
 3. **failed 必须把 `fail_reason` 显示出来**（FR-05 不静默缺失）。`pending`/`running` 在单份响应里出现时显示"进行中"，不许显示成空白正文。
+
+## 视觉
+
+方向「编辑部案头」定于 [ADR-0013](../decisions/0013-editorial-desk-visual.md)：记录是原稿，报表是付印清样。实现集中在 `Theme.kt`（色板、字阶）与 `Components.kt`（共用元件），Screen 只做组装。
+
+| 元素 | 取值 | 用途 |
+| --- | --- | --- |
+| 纸色 | `#F3F3ED` | 全局背景，铺满状态栏与导航栏 |
+| 墨色 / 次级墨 | `#1B1C18` / `#5F6257` | 标题、正文 / 日期、说明、占位 |
+| 分隔线 | `#CACBBF` | 1dp 发丝线：条目之间、段落之间 |
+| 朱红 | `#B23A2D` | 唯一强调色：状态印章、选中下划线、光标、主动作、页边线 |
+| 正文 / 界面字 | 系统衬线 / 系统无衬线 | 记录与报表正文、大标题 / 按钮、标签、日期、状态；数字统一 tnum |
+| 圆角 | 2dp | 所有元件；不用卡片，不用阴影 |
+
+- **分层靠线，不靠盒子**：2dp 墨色通栏线分大区块（报头、页眉），1dp 发丝线分条目；列表不是卡片堆。
+- **状态印章**：报表的 ready/failed 显示为朱红方框、其余墨色，旋转 -3°；状态文本变化时做一次轻微下按——全 App 唯一的非用户触发动效，别处不加过渡、不加骨架屏。
+- **页边线**：编辑页一条 1dp 朱红竖线从页眉通到底部，正文从线右侧起排，模拟稿纸左边距。
+- **系统栏**：edge-to-edge，系统栏透明、图标深色；`adjustResize` 避让键盘，底栏动作始终在键盘之上。
+- **文案**：按钮动词与结果同名（"存"→已保存、"复制全文"→已复制）；错误说清发生了什么，不道歉、不卖萌。
 
 ## 接口调用与错误显示
 
@@ -124,7 +143,7 @@ ADR-0008 说界面三块（列表、录入、报表）。这里有四屏：口�
 1. **模拟器级**（`local` flavor + Windows 上 `memora.exe`）：记录增删改查、搜索、超限行文、口令错误与限速、报表生成与复制、failed 显示原因。这一级出不了门——它不碰公网，也证明不了手机能连上服务器。
 2. **手机级**（`server flavor` + 服务器）：FR-01"两台设备看到同一条"、蜂窝网可达（要安全组入站规则已加）、真 DeepSeek 返回的报表质量。
 
-工程第一次能算过：`./gradlew :app:assembleLocalDebug` 出 APK 且模拟器能读到 `memora.exe` 里的记录。版本不匹配导致同步失败属于预期内（本机没有 JDK 和 Android SDK，这些 Kotlin 文件在我这边一行都没编译过），按 Android Studio 提示升 AGP/Kotlin 即可，不用改业务代码。
+工程可编译可运行（Windows 实测）：`./gradlew :app:assembleLocalDebug` 出 APK，模拟器经 `10.0.2.2` 连上本机 `memora.exe`，记录增删改查、搜索、超限、报表生成与复制都点过。`serverDebug` 因缺证书按设计编译失败——这本身就是那条防线的验证。
 
 ## 未决问题
 
