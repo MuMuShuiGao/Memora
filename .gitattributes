@@ -1,0 +1,9 @@
+# 行尾由仓库定死，不再看各人机器上 core.autocrlf 的脸色（ADR-0016）
+* text=auto eol=lf
+
+# cmd.exe 对 LF 批处理的 label/goto 处理不可靠，这两个必须留在 CRLF
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+*.jar binary
+*.png binary

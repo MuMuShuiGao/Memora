@@ -2,7 +2,7 @@
 
 > 状态：生效中
 > 摘要：当前进度快照与断点，新会话从这里接上
-> 更新：2026-11-26 22:38
+> 更新：2026-11-26 23:29
 
 这份文件只描述**现在**。已完成的历史进 ADR 或对应设计文档，卡了两周以上的事项应该转成 ADR 或 refactor 方案，不要赖在这里。上限 60 行。
 
@@ -32,6 +32,7 @@
 
 没有"改到一半没验证"的代码。四处已知粗糙，摆明了不藏：auth 与 config 没有自己的单测（靠 api 单测和冒烟间接兜住）；冒烟里"上一个已结束的周期"是直接写库造的（今天永远落在当前周里）；**手机真机那半仍未跑**（公网端口与证书 2026-11-26 19:02 已从 Windows 实测）——之前"只编译没运行"当场撞出过一个编译期完全看不见的致命错（`App.kt` 里 `apply` 把口令赋给了外层 Compose 状态，见 ADR-0012 之后的修复），"能编"和"能用"之间确实埋着东西；待办屏的拖拽只在模拟器上以 `input swipe` 验过，真手指的抖动与快速甩动没测。
 `scripts/stub-llm.py` 把每次调用追加到 hits 文件，"参数不合法时一次模型都没打""补跑一次不多打"靠它计数，不是靠日志猜。
+**本机联调回路整条留在盘上但当前是断开状态**：`memora.exe`（PID 21972 还在听 8443）、`devlocal/`、`tls-test/` 都在，而 `app/src/local/res/raw/memora_server_cert.pem` 已还原成仓库那张，不再与 `tls-test/server.key` 配对——要恢复就 `cp tls-test/server.crt` 过去再重装一次 `localDebug`（证书是编译期打进包的）。
 **冒烟脚本本身在 Windows 上有两道码页坎**（产品没这问题，安卓端 OkHttp 直接发 UTF-8）：Git Bash 会把 curl 的命令行参数按 GBK 转一遍，中文正文和中文口令全失真；Python 的 stdio 同样按 GBK 解，读服务端的 UTF-8 会把汉字后面的引号吃掉。脚本侧已按"载荷走文件 + `PYTHONUTF8=1` + 口令取 ASCII"绕开，别再往回改。
 更新这一轮在模拟器上撞出两个**只有真点才看得见**的错：`canRequestPackageInstalls()` 少个 s（这条编译期就拦住了），以及"我开好了，继续安装"按下去没反应——`install()` 认的入场状态集合里漏了 `NeedsPermission`，界面给了按钮却不接。还有一处是走查时发现的漏网：`Installed` 那一档当时只在更新页里有文案，主屏提醒行返回 null，用户没有任何入口进那页，等于这句永远看不见——现在补成一行一次性的"刚装好"。这一行是靠把 `pending_install_code` 写进偏好文件验出来的（本机发布的那个包其实就是 v0.2，版本号没真涨上去），机制走通、真实涨号那一次还没发生。
 
@@ -42,6 +43,7 @@
 - `design/android-client.md`：五屏改六屏（更新页）+ 更新页四条定论（提醒是一行字不是弹窗、下载不起前台服务、安装那一下归系统、进度按字节比）、本地存储四样改五样（`memora.update` 两行标记与缓存里的 APK）、错误表加 `not_released` / `release_bad`、§6 补"四变体一把钥匙"的理由、验收段按本轮模拟器实跑更新；`INDEX.md` 补 0015 与两行摘要。
 - `deploy/memora.env.example` 加 `MEMORA_RELEASE_DIR`（含 `ProtectSystem=strict` 下只能落在 `/var/lib/memora` 那句）；`android/README.md` 新增"签名：四个变体一把钥匙"与"发一版更新"两节（含首次"允许安装未知应用"），"已知的坑"补检查时机与"服务器只放一个 `app.apk`"这条限制。
 - 代码侧新增：`internal/api/release.go` + 单测、`scripts/release.sh`、`android/.../UpdateChecker.kt`（状态机 / 下载 / 交棒）、`UpdatePage.kt`、`res/xml/file_paths.xml`；`MemoApi.kt` 加 `releaseInfo()` 与 `downloadApk()`，`AndroidManifest.xml` 加 `REQUEST_INSTALL_PACKAGES` 与 FileProvider，`build.gradle.kts` 接 keystore、`versionCode` 提到 2；`scripts/smoke.sh` 补 11 项更新通道断言。
+- 新建 `decisions/0016-repo-owned-line-endings.md` + 仓库根 `.gitattributes`：Windows 上 11 个 `.go` 长期挂着假 `M`（`git diff` 输出 0 字节），根因是机器级 `core.autocrlf=true` 与工具写回的 LF 打架；现在行尾由仓库定，`git add --renormalize .` 跑过且暂存区为空。否掉"各人自己关 autocrlf""每次 checkout""对噪声文件 skip-worktree""全局 eol=crlf"四条。`INDEX.md` 补 0016 一行。
 
 ## 待确认（会影响下一步的）
 
