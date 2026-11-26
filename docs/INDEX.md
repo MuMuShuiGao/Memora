@@ -5,7 +5,7 @@
 
 **项目一句话**：给一个人用的安卓备忘录，随手记纯文字想法，由大模型按自然周/自然月汇总成能直接交出去的周报和月报。
 
-**代码在哪**：服务端在仓库根目录（`cmd/memora` + `internal/` 六块，Go 单二进制），安卓端在 `android/`（Kotlin + Compose，两个 flavor，`localDebug` 已编译通过、尚未在模拟器里运行过）。设计与验收口径见 [design/memo-and-report.md](design/memo-and-report.md) 与 [design/android-client.md](design/android-client.md)，当前进度与断点见 [NOW.md](NOW.md)。
+**代码在哪**：服务端在仓库根目录（`cmd/memora` + `internal/` 六块，Go 单二进制），安卓端在 `android/`（Kotlin + Compose，两个 flavor，`localDebug` 已在模拟器里跑通（增删改查、搜索、超限、报表生成与复制））。设计与验收口径见 [design/memo-and-report.md](design/memo-and-report.md) 与 [design/android-client.md](design/android-client.md)，当前进度与断点见 [NOW.md](NOW.md)。
 
 ---
 
