@@ -1,11 +1,13 @@
 # 安卓客户端
 
 原生 Kotlin + Compose（ADR-0008），依赖只有 OkHttp 和 kotlinx.serialization（ADR-0010）。
-界面划分、错误文案、本地存哪四样，都在 [docs/design/android-client.md](../docs/design/android-client.md)。
+界面划分、错误文案、本地存哪五样，都在 [docs/design/android-client.md](../docs/design/android-client.md)。
 
 **已在 Windows 上编过并跑通**：`localDebug` 全绿，APK 实测 9.7 MiB，`res/raw/memora_server_cert.pem` 在包里；
-模拟器里记录增删改查、搜索、超限拦截、报表生成与复制全文都过了（服务端日志与界面双向对上）。
-`serverDebug` 停在`raw/memora_server_cert not found`——这是有意的编译期失败，不是坏了。
+模拟器里记录增删改查、搜索、超限拦截、报表生成与复制全文、应用内更新（提醒 → 下载 → 系统安装页）都过了
+（服务端日志与界面双向对上）。
+`serverDebug` 在 fresh clone 上停在`raw/memora_server_cert not found`——这是有意的编译期失败，不是坏了；
+把服务器那张证书按下面第三节拷进去就编得过，本机现在就是这状态。
 
 ## 两个 flavor
 
@@ -119,11 +121,57 @@ Build Variants 选 `localDebug` → Make Project。
 模拟器和真机都能出网，变的只是那张要打进包的证书。
 
 1. `MEMORA_PUBLIC_IP=<公网地址> ./deploy/mkcert.sh /etc/memora/tls`，SAN 里必须是手机实际连的那个地址。
-2. 那张 `server.crt` 改名进 `app/src/server/res/raw/memora_server_cert.pem`。
+2. 那张 `server.crt` 改名进 `app/src/server/res/raw/memora_server_cert.pem`（这文件被 ignore，别提交）。
 3. Build Variants 选 `serverRelease`（或 `serverDebug`），产出 APK 拷到手机安装。
    首次运行要在连接页手填 `https://<公网地址>:8443`。
-4. 签名：仓库里没有 keystore，也不该有。要发 Release 包就在 `app/build.gradle.kts` 里配
-   `signingConfig`，keystore 文件已被 `.gitignore` 挡住在仓库外。
+
+## 签名：四个变体一把钥匙
+
+`debug`、`release`、`local`、`server` 全部用同一把 keystore 签（ADR-0015）——覆盖安装的前提是签名一致，
+要是 `debug` 用 AGP 默认的 debug key，以后从 `serverDebug` 换到 `serverRelease` 就得先卸载一次，
+应用内更新那条路当场废掉。
+
+钥匙留在仓库外，两行写在**用户级** `~/.gradle/gradle.properties`：
+
+```properties
+memoraKeystore=/c/Users/<你>/.android/memora.keystore
+memoraKeystorePassword=<口令>
+```
+
+第一次没有这把钥匙就自己生成（口令自己留着，别贴进对话也别提交）：
+
+```bash
+keytool -genkeypair -v -keystore ~/.android/memora.keystore -alias memora \
+  -keyalg RSA -keysize 2048 -validity 10000
+```
+
+两行缺任一条，构建自动落回 AGP 默认签名——别人 clone 完照样能编译，只是那种包之间互相装不上。
+换掉这把钥匙要卸载重装一次手机上的 App，这是 ADR-0015 明写的代价。
+
+## 发一版更新
+
+改完代码、验过之后：
+
+1. `android/app/build.gradle.kts` 里 `versionCode` **加一**，`versionName` 跟着改。不加这一条，
+   手机上那次覆盖安装会失败，而提醒行永远显示同一个新版本。
+2. `./gradlew.bat :app:assembleServerRelease`。
+3. 从 Git Bash 发出去（地址、SSH 别名、目录都走环境变量，值不进仓库）：
+
+   ```bash
+   APK=android/app/build/outputs/apk/server/release/app-server-release.apk \
+   MEMORA_SCP='scp -i ~/.ssh/<key>' MEMORA_SSH='ssh -i ~/.ssh/<key> <别名>' \
+   MEMORA_RELEASE_DIR=/var/lib/memora/release NOTES='这版改了什么' bash scripts/release.sh
+   ```
+
+   脚本从 `build.gradle.kts` 读版本号写 `release.json`，所以清单和包不可能对不上；两个文件先落
+   `<目录>.tmp.$$` 再整体换名，不会出现"清单到了包还没到"那种半截状态。
+4. 手机上不用做任何事：下次进主屏就会出现那一行提醒，点进去下载、安装。
+
+**第一次安装会多一个系统开关**：Android 8 起"允许安装未知应用"按来源逐个授权，App 会先把你送到那个开关前面，
+开回来再点一次"继续安装"就行——开一次就一直有效。这一步不是 App 在拦你，是系统在拦。
+
+服务端要配 `MEMORA_RELEASE_DIR`（见 `deploy/memora.env.example`）；没配的话 `/v1/app/release` 一律 404，
+客户端就当没发过版，静默不提示。
 
 ## 已知的坑
 
@@ -138,3 +186,8 @@ Build Variants 选 `localDebug` → Make Project。
 - **归属周期不由客户端算**：周一开头这套规则只在服务端 `internal/period` 一份，
   手机上显示的周/月来自 `GET /v1/periods/now` 和记录里的 `week_start`。手机时区和服务端
   时区不一致时，看到的日期会不一样，这是正确的——报表按服务端时区归档。
+- **更新只在进主屏时查一次**：一直开着 App 不会自己冒出新提醒，退回主屏或重开才有。
+  服务端没配 `MEMORA_RELEASE_DIR` 时那行提醒根本不出现，不算错误。
+- **服务器上只放一个 `app.apk`**，它是 `serverRelease`（applicationId 不带 `.local`）。模拟器上那个
+  `.local` 变体查到的也是同一个版本号，点安装会把正式包当成**另一个 App** 装上，而不是更新自己——
+  所以发版只对手机生效，本机联调的包还是用 `adb install -r` 直接装。

@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 交给系统安装页的路径白名单（ADR-0015）。cache-path 对应 getCacheDir()，
+     更新包就落在那儿；只声明这一个目录，不放开应用私有存储。 -->
+<paths>
+    <cache-path name="updates" path="." />
+</paths>

@@ -13,6 +13,8 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import java.io.File
 import java.io.IOException
 import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
@@ -72,6 +74,63 @@ class MemoApi(private val baseUrl: String) {
 
     suspend fun deleteTask(id: Long) {
         raw("DELETE", "/v1/tasks/$id", null)
+    }
+
+    // 更新通道（ADR-0015）：没有可更新的版本时服务端回 404，这不算错误。
+    // 检查更新的调用方不该因为"还没发过版"被打扰，所以这里把 404 摘成 null，其余照抛。
+    suspend fun releaseInfo(): ReleaseInfo? =
+        try {
+            get("/v1/app/release")
+        } catch (e: ApiError) {
+            if (e.kind == ApiError.Kind.NotFound) null else throw e
+        }
+
+    // 下到 dest，返回落盘字节数；total 取不到时为 -1。
+    // 进度回调每个数据块回一次，多久刷一次由调用方管，这层不看时间。
+    suspend fun downloadApk(dest: File, onProgress: (done: Long, total: Long) -> Unit): Long =
+        withContext(Dispatchers.IO) {
+            val request = Request.Builder()
+                .url(baseUrl.trimEnd('/') + "/v1/app/release/file")
+                .header("X-Access-Key", passphrase)
+                .get()
+                .build()
+            try {
+                client.newCall(request).execute().use { response ->
+                    if (!response.isSuccessful) {
+                        throw toApiError(response.code, response.header("Retry-After"), response.body?.string().orEmpty())
+                    }
+                    writeApk(response, dest, onProgress)
+                }
+            } catch (e: ApiError) {
+                throw e
+            } catch (e: IOException) {
+                if (e is SSLException) {
+                    throw ApiError(ApiError.Kind.Certificate, e.message ?: e.javaClass.simpleName)
+                }
+                throw ApiError(ApiError.Kind.Network, e.message ?: "连接失败")
+            }
+        }
+
+    private fun writeApk(response: Response, dest: File, onProgress: (Long, Long) -> Unit): Long {
+        val body = response.body ?: throw ApiError(ApiError.Kind.Server, "响应没有正文")
+        val total = response.headers["Content-Length"]?.toLongOrNull() ?: -1L
+        // 先写 .part 再换名：中途断掉留下的是残包，不会让下次以为已经下好了。
+        val tmp = File(dest.parentFile, dest.name + ".part")
+        tmp.outputStream().use { out ->
+            body.byteStream().use { input ->
+                val buf = ByteArray(64 * 1024)
+                var done = 0L
+                while (true) {
+                    val n = input.read(buf)
+                    if (n < 0) break
+                    out.write(buf, 0, n)
+                    done += n
+                    if (total > 0) onProgress(done, total)
+                }
+            }
+        }
+        if (!tmp.renameTo(dest)) throw ApiError(ApiError.Kind.Server, "写 ${dest.name} 失败")
+        return dest.length()
     }
 
     private suspend inline fun <reified T> get(path: String): T =

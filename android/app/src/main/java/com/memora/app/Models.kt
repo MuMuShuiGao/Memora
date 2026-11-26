@@ -55,6 +55,16 @@ data class Report(
 @Serializable
 data class ReportList(val reports: List<Report> = emptyList(), val count: Int = 0)
 
+// 更新通道（ADR-0015）：versionCode 是唯一的判据，服务端没有已发布版本时这个类根本不出现。
+// size 由服务端 stat 出来，不是发布时手填的，所以"约多少 MB"不会和真实文件对不上。
+@Serializable
+data class ReleaseInfo(
+    @SerialName("version_code") val versionCode: Int = 0,
+    @SerialName("version_name") val versionName: String = "",
+    val notes: String = "",
+    val size: Long = 0,
+)
+
 @Serializable
 data class Periods(
     val now: String = "",

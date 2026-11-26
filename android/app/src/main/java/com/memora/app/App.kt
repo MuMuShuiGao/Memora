@@ -1,6 +1,7 @@
 package com.memora.app
 
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -86,6 +87,9 @@ fun AppRoot(local: LocalStore, credentials: CredentialStore) {
 private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () -> Unit) {
     var tab by rememberSaveable { mutableStateOf(TAB_TASKS) }
     var editing by remember { mutableStateOf<Editing?>(null) }
+    // "正在看更新页"不进 savedInstanceState：装完包进程会被系统换掉，
+    // 重启后回到正常首屏，那句"刚装好"由更新页自己的状态带出来。
+    var showUpdate by remember { mutableStateOf(false) }
 
     val target = editing
     if (target != null) {
@@ -99,12 +103,28 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
         return
     }
 
+    // checker 挂在这一层，所以下载中切页签再回来，进度不会丢。
+    val update = rememberUpdateChecker(api)
+    if (showUpdate) {
+        UpdatePage(update, onBack = { showUpdate = false })
+        return
+    }
+
     Column(Modifier.fillMaxSize()) {
         Masthead(
             tab = tab,
             onTab = { tab = it },
             onSettings = onForgetPassphrase,
         )
+        // 更新提醒不弹窗，占报头下面一行，点了才进更新页（ADR-0015）。
+        update.hintText()?.let {
+            Notice(
+                it,
+                Modifier
+                    .padding(horizontal = 20.dp, vertical = 6.dp)
+                    .clickable(onClick = { showUpdate = true }),
+            )
+        }
         when (tab) {
             TAB_NOTES -> NotesScreen(api, onForgetPassphrase) { note ->
                 editing = Editing(note)
