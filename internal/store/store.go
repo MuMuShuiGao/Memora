@@ -59,6 +59,24 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// inTx 跑一个必须整体成败的写事务。待办的 rank 是"整个未完成集合"的属性——新建要顺延、
+// 勾掉要收紧——单条语句表达不了，又不允许出现"顺延了一半"的中间状态。
+// Store 只开一条连接（见 Open），所以这里不需要考虑并发事务。
+func (s *Store) inTx(ctx context.Context, fn func(tx *sql.Tx) error) error {
+	tx, err := s.db.BeginTx(ctx, nil)
+	if err != nil {
+		return fmt.Errorf("store: 起事务: %w", err)
+	}
+	if err := fn(tx); err != nil {
+		_ = tx.Rollback()
+		return err
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("store: 提交事务: %w", err)
+	}
+	return nil
+}
+
 // migrate 用 IF NOT EXISTS 建表，所以启动即幂等。字段定义与 design §1 一一对应。
 func (s *Store) migrate(ctx context.Context) error {
 	const schema = `
@@ -73,6 +91,22 @@ CREATE TABLE IF NOT EXISTS notes (
 CREATE INDEX IF NOT EXISTS idx_notes_created ON notes(created_at DESC);
 CREATE INDEX IF NOT EXISTS idx_notes_week    ON notes(week_start);
 CREATE INDEX IF NOT EXISTS idx_notes_month   ON notes(month_start);
+
+CREATE TABLE IF NOT EXISTS tasks (
+	id               INTEGER PRIMARY KEY,
+	body             TEXT    NOT NULL,
+	done             INTEGER NOT NULL DEFAULT 0 CHECK (done IN (0,1)),
+	rank             INTEGER NOT NULL,
+	done_at          TEXT,
+	done_week_start  TEXT,
+	done_month_start TEXT,
+	created_at       TEXT    NOT NULL,
+	updated_at       TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_tasks_open ON tasks(done, rank);
+CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done, done_at DESC);
+CREATE INDEX IF NOT EXISTS idx_tasks_done_week  ON tasks(done_week_start);
+CREATE INDEX IF NOT EXISTS idx_tasks_done_month ON tasks(done_month_start);
 
 CREATE TABLE IF NOT EXISTS reports (
 	id            INTEGER PRIMARY KEY,
