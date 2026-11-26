@@ -18,6 +18,25 @@ data class Note(
 @Serializable
 data class NoteList(val notes: List<Note> = emptyList(), val count: Int = 0)
 
+// 待办（ADR-0014）：rank 是服务端未完成序列里的名次，客户端只当展示顺序用。
+// doneAt 可空——没勾掉的就没有完成时刻，报表归属跟着它走。
+@Serializable
+data class Task(
+    val id: Long,
+    val body: String,
+    val done: Boolean = false,
+    val rank: Int = 0,
+    @SerialName("done_at") val doneAt: String? = null,
+    @SerialName("done_week_start") val doneWeekStart: String = "",
+)
+
+@Serializable
+data class TaskList(
+    val tasks: List<Task> = emptyList(),
+    @SerialName("open_count") val openCount: Int = 0,
+    @SerialName("done_count") val doneCount: Int = 0,
+)
+
 // body / sourceCount / failReason / generatedAt 在服务端是"可能没有值"的，
 // 这里的可空必须保留：ready 但正文为空串，和还没生成好，是界面要分开的两件事（FR-05）。
 @Serializable

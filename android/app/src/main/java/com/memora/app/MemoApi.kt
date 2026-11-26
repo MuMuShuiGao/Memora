@@ -3,6 +3,7 @@ package com.memora.app
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
+import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.contentOrNull
@@ -55,17 +56,36 @@ class MemoApi(private val baseUrl: String) {
     suspend fun generateReport(kind: String, periodStart: String): Report =
         postEmpty("/v1/reports/$kind/$periodStart/generate")
 
+    // 待办五条，对齐 design §5。勾掉与取消勾走同一个 PATCH 的 done 字段；
+    // 调序一次提交整列 id，不发单条 rank——半截顺序比失败更难收拾。
+    suspend fun listTasks(): TaskList = get("/v1/tasks")
+
+    suspend fun createTask(body: String): Task = post("/v1/tasks", body)
+
+    suspend fun updateTaskBody(id: Long, body: String): Task = patch("/v1/tasks/$id", body)
+
+    suspend fun setTaskDone(id: Long, done: Boolean): Task =
+        sendBody("PATCH", "/v1/tasks/$id", DoneRequest(done))
+
+    suspend fun reorderTasks(ids: List<Long>): TaskList =
+        sendBody("POST", "/v1/tasks/reorder", IdsRequest(ids))
+
+    suspend fun deleteTask(id: Long) {
+        raw("DELETE", "/v1/tasks/$id", null)
+    }
+
     private suspend inline fun <reified T> get(path: String): T =
         JSON.decodeFromString(raw("GET", path, null))
 
     private suspend inline fun <reified T> post(path: String, body: String): T =
-        postBody(path, NoteRequest(body))
+        sendBody("POST", path, BodyRequest(body))
 
     private suspend inline fun <reified T> patch(path: String, body: String): T =
-        postBody(path, NoteRequest(body), "PATCH")
+        sendBody("PATCH", path, BodyRequest(body))
 
-    private suspend inline fun <reified T> postBody(path: String, payload: NoteRequest, method: String = "POST"): T =
-        JSON.decodeFromString(raw(method, path, JSON.encodeToString(NoteRequest.serializer(), payload)))
+    // 三种载荷各是一个小序列化类（正文 / done / ids），拼串这件事只留一处。
+    private suspend inline fun <reified T, reified P : Any> sendBody(method: String, path: String, payload: P): T =
+        JSON.decodeFromString(raw(method, path, JSON.encodeToString(payload)))
 
     private suspend inline fun <reified T> postEmpty(path: String): T =
         JSON.decodeFromString(raw("POST", path, ""))
@@ -148,7 +168,13 @@ class MemoApi(private val baseUrl: String) {
     }
 
     @Serializable
-    private data class NoteRequest(val body: String)
+    private data class BodyRequest(val body: String)
+
+    @Serializable
+    private data class DoneRequest(val done: Boolean)
+
+    @Serializable
+    private data class IdsRequest(val ids: List<Long>)
 
     companion object {
         // 输入框计录用这个数字，服务端也有一份并会在超限时回 413。两处都有是有意的取舍，

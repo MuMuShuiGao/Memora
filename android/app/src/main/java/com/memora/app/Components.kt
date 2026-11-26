@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.material3.Button
 import androidx.compose.material3.ButtonDefaults
@@ -65,6 +66,8 @@ fun UnderlineField(
     placeholder: String = "",
     singleLine: Boolean = true,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
+    // 回车即交出去那条。默认什么都不做，所以搜索框那类调用方不必管它。
+    onSubmit: () -> Unit = {},
     visualTransformation: VisualTransformation = VisualTransformation.None,
     textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
 ) {
@@ -83,6 +86,7 @@ fun UnderlineField(
             textStyle = textStyle.copy(color = Ink),
             cursorBrush = SolidColor(Vermilion),
             keyboardOptions = keyboardOptions,
+            keyboardActions = KeyboardActions(onDone = { onSubmit() }),
             visualTransformation = visualTransformation,
             interactionSource = interactions,
             modifier = Modifier

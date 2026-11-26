@@ -26,6 +26,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
 private const val TAB_NOTES = "notes"
+private const val TAB_TASKS = "tasks"
 private const val TAB_REPORTS = "reports"
 
 // 编辑页的目标：note 为 null 是新建，否则是改这一条。
@@ -109,6 +110,8 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
                 editing = Editing(note)
             }
 
+            TAB_TASKS -> TasksScreen(api, onForgetPassphrase)
+
             else -> ReportsScreen(api, local, onForgetPassphrase)
         }
     }
@@ -128,6 +131,7 @@ private fun Masthead(tab: String, onTab: (String) -> Unit, onSettings: () -> Uni
         SectionRule(Modifier.padding(top = 8.dp))
         Row(Modifier.padding(horizontal = 20.dp), Arrangement.spacedBy(24.dp)) {
             UnderlineTab("记录", tab == TAB_NOTES) { onTab(TAB_NOTES) }
+            UnderlineTab("待办", tab == TAB_TASKS) { onTab(TAB_TASKS) }
             UnderlineTab("报表", tab == TAB_REPORTS) { onTab(TAB_REPORTS) }
         }
     }
