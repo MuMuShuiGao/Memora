@@ -1,15 +1,16 @@
 package com.memora.app
 
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.text.KeyboardOptions
-import androidx.compose.material3.Button
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -34,35 +35,60 @@ fun ConnectScreen(initialUrl: String, onSave: suspend (String, String) -> String
 
     val ready = url.isNotBlank() && passphrase.isNotEmpty() && !busy
 
-    Column(Modifier.fillMaxSize().padding(16.dp)) {
-        Text("连到服务器", style = MaterialTheme.typography.titleLarge)
+    // 这一屏像笔记本的扉页：先是名字，再是接入方式。
+    Column(
+        Modifier
+            .fillMaxSize()
+            .verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp),
+    ) {
+        Spacer(Modifier.height(40.dp))
+        Text("Memora", style = MaterialTheme.typography.displaySmall, color = Ink)
         Text(
-            "地址要带 https://。这张证书是打进 APK 的，地址必须出现在证书的 SAN 里，" +
-                "否则握手会失败。",
-            style = MaterialTheme.typography.bodySmall,
+            "记下的想法，会变成周报和月报。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkSoft,
+            modifier = Modifier.padding(top = 6.dp),
         )
 
-        OutlinedTextField(
+        SectionRule(Modifier.padding(top = 24.dp))
+
+        Text(
+            "连接服务器",
+            style = MaterialTheme.typography.titleLarge,
+            color = Ink,
+            modifier = Modifier.padding(top = 28.dp),
+        )
+        Text(
+            "地址以 https:// 开头。证书已经打进 APK，地址不在证书里就会握手失败。",
+            style = MaterialTheme.typography.bodyMedium,
+            color = InkSoft,
+            modifier = Modifier.padding(top = 6.dp),
+        )
+
+        UnderlineField(
             value = url,
             onValueChange = { url = it },
-            label = { Text("服务器地址") },
+            label = "服务器地址",
             singleLine = true,
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Uri),
-            modifier = Modifier.fillMaxWidth().padding(top = 12.dp),
+            modifier = Modifier.padding(top = 24.dp),
         )
 
-        OutlinedTextField(
+        UnderlineField(
             value = passphrase,
             onValueChange = { passphrase = it },
-            label = { Text("访问口令") },
+            label = "访问口令",
             singleLine = true,
             visualTransformation = PasswordVisualTransformation(),
             keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            modifier = Modifier.padding(top = 16.dp),
         )
 
-        Button(
+        PrimaryAction(
+            if (busy) "连接中…" else "测试并保存",
             enabled = ready,
+            modifier = Modifier.fillMaxWidth().padding(top = 28.dp),
             onClick = {
                 busy = true
                 notice = null
@@ -82,28 +108,23 @@ fun ConnectScreen(initialUrl: String, onSave: suspend (String, String) -> String
                     }
                 }
             },
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-        ) {
-            Text(if (busy) "连接中…" else "测试并保存")
-        }
+        )
 
-        TextButton(
+        TextAction(
+            "服务器还没起来？只保存，先不测",
             enabled = ready,
+            color = InkSoft,
+            modifier = Modifier.padding(top = 4.dp),
             onClick = {
                 val target = normalizeUrl(url)
                 scope.launch { notice = onSave(target, passphrase) }
             },
-        ) {
-            Text("服务器还没起来？只保存，先不测")
-        }
+        )
 
         notice?.let {
-            Text(
-                it,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(top = 12.dp),
-            )
+            Notice(it, Modifier.padding(top = 16.dp))
         }
+        Spacer(Modifier.height(32.dp))
     }
 }
 

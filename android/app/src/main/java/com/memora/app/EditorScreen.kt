@@ -1,18 +1,16 @@
 package com.memora.app
 
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
-import androidx.compose.material3.Button
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
-import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -22,8 +20,11 @@ import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
@@ -71,46 +72,89 @@ fun EditorScreen(
         local.saveDraft(Draft(note?.id, value))
     }
 
-    Column(Modifier.fillMaxSize().padding(horizontal = 16.dp, vertical = 12.dp)) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+    Column(Modifier.fillMaxSize()) {
+        Row(
+            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
             Text(
-                if (note == null) "记一条" else "改第 ${note.id} 条",
-                style = MaterialTheme.typography.titleMedium,
+                if (note == null) "新记录" else "改第 ${note.id} 条",
+                style = MaterialTheme.typography.titleLarge,
+                color = Ink,
+                modifier = Modifier.weight(1f),
             )
-            TextButton(onClick = onDone) { Text("取消") }
+            TextAction("取消", onClick = onDone, color = InkSoft)
         }
         note?.let {
             Text(
-                "记于 ${formatInstant(it.createdAt)}　归 ${it.weekStart} 那周",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                "记于 ${formatInstant(it.createdAt)}，归 ${it.weekStart} 那周",
+                style = MaterialTheme.typography.labelSmall,
+                color = InkSoft,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
             )
         }
 
-        OutlinedTextField(
-            value = value,
-            onValueChange = { text = it },
-            modifier = Modifier.fillMaxWidth().weight(1f).focusRequester(focus),
-            placeholder = { Text("一个想法一条，写完就存") },
-        )
+        // 稿纸的页边线：只在录入时出现，提醒这是还没交出去的手稿。
+        Box(
+            Modifier
+                .weight(1f)
+                .fillMaxWidth()
+                .padding(horizontal = 20.dp, vertical = 8.dp)
+                .drawBehind {
+                    val x = 12.dp.toPx()
+                    drawLine(
+                        color = Vermilion.copy(alpha = 0.55f),
+                        start = Offset(x, 0f),
+                        end = Offset(x, size.height),
+                        strokeWidth = 1.dp.toPx(),
+                    )
+                },
+        ) {
+            BasicTextField(
+                value = value,
+                onValueChange = { text = it },
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(start = 24.dp)
+                    .focusRequester(focus),
+                textStyle = MaterialTheme.typography.bodyLarge.copy(color = Ink),
+                cursorBrush = SolidColor(Vermilion),
+                decorationBox = { inner ->
+                    Box {
+                        if (value.isEmpty()) {
+                            Text(
+                                "一个想法一条，写完就存",
+                                style = MaterialTheme.typography.bodyLarge,
+                                color = InkSoft.copy(alpha = 0.55f),
+                            )
+                        }
+                        inner()
+                    }
+                },
+            )
+        }
 
+        Hairline()
         Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
+            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             Text(
-                "$chars/$max",
-                color = if (over) MaterialTheme.colorScheme.error else MaterialTheme.colorScheme.onSurfaceVariant,
+                "$chars / $max",
+                style = MaterialTheme.typography.labelSmall,
+                color = if (over) Vermilion else InkSoft,
+                modifier = Modifier.weight(1f),
             )
-            Spacer(Modifier.weight(1f))
             if (note != null) {
-                OutlinedButton(
+                TextAction(
+                    if (askDelete) "确认删除" else "删除",
                     enabled = !busy,
+                    color = if (askDelete) Vermilion else InkSoft,
                     onClick = {
                         if (!askDelete) {
                             askDelete = true
-                            return@OutlinedButton
+                            return@TextAction
                         }
                         busy = true
                         scope.launch {
@@ -135,11 +179,13 @@ fun EditorScreen(
                             }
                         }
                     },
-                ) { Text(if (askDelete) "再点一次确认删除" else "删除") }
+                )
             }
-            Button(
+            PrimaryAction(
+                if (busy) "存…" else "存",
                 // 空白不发请求：服务端会回 400，但没必要跑这一趟。
                 enabled = !busy && value.isNotBlank() && !over,
+                modifier = Modifier.widthIn(min = 88.dp),
                 onClick = {
                     busy = true
                     val body = value.trim()
@@ -166,11 +212,11 @@ fun EditorScreen(
                         }
                     }
                 },
-            ) { Text(if (busy) "存…" else "存") }
+            )
         }
 
         notice?.let {
-            Text(it, color = MaterialTheme.colorScheme.error, modifier = Modifier.padding(top = 8.dp))
+            Notice(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp))
         }
     }
 }

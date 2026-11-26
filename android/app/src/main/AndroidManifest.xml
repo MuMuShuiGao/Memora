@@ -9,7 +9,7 @@
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@xml/network_security_config"
-        android:theme="@android:style/Theme.Material.Light.NoActionBar">
+        android:theme="@style/Theme.Memora">
 
         <!-- allowBackup=false：备份会把 Keystore 密文和地址一起带走，而这套访问控制
              只有口令这一道防线，不给"拷走 app 数据"留这条路。
