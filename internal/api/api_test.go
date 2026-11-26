@@ -57,6 +57,13 @@ func newHarness(t *testing.T) *harness {
 	if err != nil {
 		t.Fatalf("store.Open: %v", err)
 	}
+	// 必须显式关：SQLite 文件被进程握着的时候，Windows 上 t.TempDir 的清理会失败，
+	// 于是整包测试全红在"删不掉临时目录"这一条与断言无关的地方（实测）。
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Errorf("关闭存储: %v", err)
+		}
+	})
 
 	hash, err := bcrypt.GenerateFromPassword([]byte(testPass), bcrypt.MinCost)
 	if err != nil {
