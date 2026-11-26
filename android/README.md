@@ -3,8 +3,9 @@
 原生 Kotlin + Compose（ADR-0008），依赖只有 OkHttp 和 kotlinx.serialization（ADR-0010）。
 界面划分、错误文案、本地存哪四样，都在 [docs/design/android-client.md](../docs/design/android-client.md)。
 
-**已在 Windows 上编过**：`localDebug` 全绿，APK 实测 9.6 MiB，`res/raw/memora_server_cert.pem` 在包里。
-`serverDebug` 停在你还没拷证书这一步，报 `raw/memora_server_cert not found`——这是有意的编译期失败，不是坏了。
+**已在 Windows 上编过并跑通**：`localDebug` 全绿，APK 实测 9.7 MiB，`res/raw/memora_server_cert.pem` 在包里；
+模拟器里记录增删改查、搜索、超限拦截、报表生成与复制全文都过了（服务端日志与界面双向对上）。
+`serverDebug` 停在`raw/memora_server_cert not found`——这是有意的编译期失败，不是坏了。
 
 ## 两个 flavor
 
@@ -75,26 +76,39 @@ Build Variants 选 `localDebug` → Make Project。
 
 1. 装 Android Studio（自带 SDK、模拟器、JDK）。
 2. 签一张覆盖模拟器别名地址的证书。用 Git for Windows 自带的 Git Bash 在这台机器上做就行，
-   私钥留在本机、不外传也不提交：
+   私钥留在本机、不外传也不提交。**前面那个 `MSYS_NO_PATHCONV=1` 不能省**——不关路径转换，
+   脚本里的 `-subj "/CN=memora"` 会被 MSYS 改写成 `D:/Git/CN=memora`，openssl 报
+   `req: subject name is expected to be in the format /type0=value0/...`：
 
    ```bash
-   MEMORA_PUBLIC_IP=10.0.2.2,127.0.0.1,DNS:localhost ./deploy/mkcert.sh ./tls-test
+   MSYS_NO_PATHCONV=1 MEMORA_PUBLIC_IP=10.0.2.2,127.0.0.1,DNS:localhost ./deploy/mkcert.sh ./tls-test
    ```
 
    `10.0.2.2` 是模拟器看宿主机的固定地址，`127.0.0.1` 给宿主机自己用。
    签完把 `tls-test/server.crt` 改名覆盖 `app/src/local/res/raw/memora_server_cert.pem`——
-   **这一步别提交**，仓库里那张对应的私钥在别处，配不上你本机这张。
-3. 交叉编译出 Windows 版服务端。本机装了 Go 就一条命令；没装就在云机上编好把 `memora.exe` 取过来
-   （12M 的独立可执行文件，不需要 Go 运行时）：
+   **这一步别提交**，仓库里那张对应的私钥在别处，配不上你本机这张。改完 `git status` 会一直显示这一个
+   `M`，它是本机产物不是工程事实，提交前看清楚。
+3. 交叉编译出 Windows 版服务端。Git Bash 里没有 `make`，所以本机直接用下面那条 `go build`
+   （等价于 `make windows`）；没装 Go 就在云机上编好把 `memora.exe` 取过来
+   （十几 M 的独立可执行文件，不需要 Go 运行时）：
 
    ```bash
-   make windows   # 或 GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o memora.exe ./cmd/memora
+   GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o memora.exe ./cmd/memora
    ```
 
-4. 把 `memora.exe`、`tls-test/server.crt`、`tls-test/server.key` 和一个 env 文件放到一起，
-   env 里 `MEMORA_TLS_CERT` / `MEMORA_TLS_KEY` 指到那两个文件，`MEMORA_LISTEN_ADDR=0.0.0.0:8443`，
-   然后 `memora.exe serve -config memora.env`。
-5. Windows 防火墙放行 8443 入站——不放行的话症状是"连不上服务器"，而不是证书报错。
+4. 写一个 env 文件起服务端。**六项都是必填**，缺任一项服务直接拒起（不带着半套配置蒙跑）：
+   `MEMORA_LISTEN_ADDR`、`MEMORA_DB_PATH`、`MEMORA_TLS_CERT`、`MEMORA_TLS_KEY`、
+   `MEMORA_PASS_HASH`、`MEMORA_LOCAL_TZ`。口令哈希这样生成，填进 env：
+
+   ```bash
+   printf '你的口令' | ./memora.exe hashpass
+   ```
+
+   `MEMORA_LOCAL_TZ` 收 `+08:00` 这种固定偏移，也收 IANA 名字——用偏移是因为 Windows 上没有系统 tzdata。
+   三个 `MEMORA_LLM_*` 可以不填，此时记录读写照常，只有点生成会回"模型未配置"。
+   然后 `./memora.exe serve -config memora.env`（`memora.env` 已被 ignore，别提交）。
+5. 不用配 Windows 防火墙。实测模拟器经 `10.0.2.2:8443` 连本机服务端全程无阻断——这条连接是模拟器进程
+   在宿主机本地发起的，不是一次外部入站，所以放行规则对它没用也不需要。要放行的只有真机走公网那次。
 6. Android Studio 里 Build Variants 选 `localDebug`，点运行。
 
 改过证书就要重装 APK：网络安全配置里的证书是编译期打进包的。
