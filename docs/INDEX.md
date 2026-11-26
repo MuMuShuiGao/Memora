@@ -31,9 +31,10 @@
 | [decisions/0011-build-mirror-and-gradle-jvm.md](decisions/0011-build-mirror-and-gradle-jvm.md) | 生效中 | Gradle 本体从华为云镜像取、依赖库阿里云两个仓库排在官方前面；构建 JVM 固定为本机的 JDK 17，不用 AS 自带的 JBR 25 |
 | [decisions/0012-ide-and-cli-gradle-jvm.md](decisions/0012-ide-and-cli-gradle-jvm.md) | 生效中 | AS 里必须把 Gradle JDK 显式选成 17（落在 `.idea/gradle.xml`），命令行靠用户级 `org.gradle.java.home`；`local.properties` 的 `java.home` 实测没被 AS 采纳，已撤 |
 | [decisions/0013-editorial-desk-visual.md](decisions/0013-editorial-desk-visual.md) | 生效中 | 客户端视觉走「编辑部案头」：纸墨色板、衬线正文配无衬线界面字、线代替卡片；否掉 Material 默认、SaaS 卡片墙、报版、深色霓虹与内置字体 |
+| [decisions/0014-todo-tasks-with-priority.md](decisions/0014-todo-tasks-with-priority.md) | 生效中 | 待办独立成表，完成时刻决定它进哪一期报表 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
-| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 两张表的字段与归属算法、九个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
-| [design/android-client.md](design/android-client.md) | 生效中 | 手机端界面划分、本地只存哪四样、九个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
+| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 三张表的字段与归属算法、十四个业务接口的请求响应形状、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
+| [design/android-client.md](design/android-client.md) | 生效中 | 手机端界面划分、本地只存哪四样、十四个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
 | [refactor/README.md](refactor/README.md) | 生效中 | 重构专项的收录边界与开工前置条件 |
 | `templates/` | — | 6 份模板：adr / prd / design / refactor / milestone / incident。目录本身无状态，模板自带的 `草案` 是占位提醒 |
 
