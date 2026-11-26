@@ -6,7 +6,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -22,7 +21,6 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 
@@ -111,11 +109,7 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
     }
 
     Column(Modifier.fillMaxSize()) {
-        Masthead(
-            tab = tab,
-            onTab = { tab = it },
-            onSettings = onForgetPassphrase,
-        )
+        Masthead(tab = tab, onTab = { tab = it })
         // 更新提醒不弹窗，占报头下面一行，点了才进更新页（ADR-0015）。
         update.hintText()?.let {
             Notice(
@@ -138,16 +132,14 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
 }
 
 @Composable
-private fun Masthead(tab: String, onTab: (String) -> Unit, onSettings: () -> Unit) {
+private fun Masthead(tab: String, onTab: (String) -> Unit) {
     Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            Text("Memora", style = MaterialTheme.typography.headlineSmall, color = Ink)
-            Spacer(Modifier.weight(1f))
-            TextAction("改口令 / 改地址", onClick = onSettings, color = InkSoft)
-        }
+        Text(
+            "Memora",
+            style = MaterialTheme.typography.headlineSmall,
+            color = Ink,
+            modifier = Modifier.padding(start = 20.dp, end = 8.dp, top = 8.dp),
+        )
         SectionRule(Modifier.padding(top = 8.dp))
         Row(Modifier.padding(horizontal = 20.dp), Arrangement.spacedBy(24.dp)) {
             UnderlineTab("待办", tab == TAB_TASKS) { onTab(TAB_TASKS) }
