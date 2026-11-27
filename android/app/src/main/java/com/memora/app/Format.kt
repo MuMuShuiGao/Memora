@@ -1,8 +1,10 @@
 package com.memora.app
 
+import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
 import java.time.temporal.WeekFields
@@ -58,3 +60,17 @@ fun dueText(day: String): String {
 }
 
 fun isoWeek(date: LocalDate): Int = date.get(WeekFields.ISO.weekOfWeekBasedYear())
+
+// 已勾掉的不算过期：它已经不需要再被安排了。
+fun isOverdue(day: String, done: Boolean): Boolean {
+    if (done) return false
+    val date = parseDay(day) ?: return false
+    return date.isBefore(LocalDate.now())
+}
+
+// Material3 的日期选择器按 UTC 零点记"哪一天"，和 due_on 的字面自然日同一口径。
+fun dayToUtcMillis(day: String): Long? =
+    parseDay(day)?.atStartOfDay(ZoneOffset.UTC)?.toInstant()?.toEpochMilli()
+
+fun millisToDay(millis: Long): String =
+    Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().toString()

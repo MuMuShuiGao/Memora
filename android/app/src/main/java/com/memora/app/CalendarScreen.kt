@@ -54,19 +54,29 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
 
     var tasks by remember { mutableStateOf<List<Task>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    // 写入口只留一条在飞：勾选与新增都会改同一份列表，交叠出去就说不清以谁为准。
+    // 新增仍是一次一条：它要拿服务端回来的名次，和勾选交叠没有好处。
     var busy by remember { mutableStateOf(false) }
+    // 勾选只锁正在飞的那一行，连点不会叠出两次 PATCH，同一天别条还能勾。
+    var togglingIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
-    var draft by remember { mutableStateOf("") }
+    var draft by rememberSaveable { mutableStateOf("") }
+    val addEnabled = !busy && togglingIds.isEmpty()
 
     LaunchedEffect(reload) {
         loading = true
-        notice = null
+        loadError = null
         try {
             tasks = api.listTasks().tasks
+            notice = null
         } catch (e: ApiError) {
-            if (e.kind == ApiError.Kind.Unauthorized) onUnauthorized() else notice = describe(e)
+            if (e.kind == ApiError.Kind.Unauthorized) {
+                onUnauthorized()
+            } else {
+                loadError = describe(e)
+                notice = null
+            }
         } finally {
             loading = false
         }
@@ -94,7 +104,7 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
 
     fun addTask() {
         val text = draft.trim()
-        if (text.isEmpty() || busy) return
+        if (text.isEmpty() || !addEnabled) return
         // 捕获点下那一刻的选中日：请求在飞时用户可能已经翻到别的日期。
         val day = selected.toString()
         runWrite {
@@ -106,13 +116,14 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     }
 
     fun toggle(task: Task) {
-        if (busy) return
-        val snapshot = tasks
+        if (busy || task.id in togglingIds) return
         val toDone = !task.done
         tasks = tasks.map {
             if (it.id == task.id) it.copy(done = toDone) else it
         }
-        runWrite {
+        togglingIds = togglingIds + task.id
+        scope.launch {
+            notice = null
             try {
                 val got = api.setTaskDone(task.id, toDone)
                 tasks = tasks.map {
@@ -123,8 +134,22 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                     }
                 }
             } catch (e: ApiError) {
-                tasks = snapshot
-                throw e
+                if (e.kind == ApiError.Kind.Unauthorized) {
+                    onUnauthorized()
+                } else {
+                    // 只退这一条的完成态：另一条勾选可能已经成功，整份快照回滚会把它也抹掉。
+                    tasks = tasks.map {
+                        if (it.id == task.id) {
+                            it.copy(done = task.done, doneAt = task.doneAt, doneWeekStart = task.doneWeekStart)
+                        } else {
+                            it
+                        }
+                    }
+                    notice = describe(e)
+                    reload++
+                }
+            } finally {
+                togglingIds = togglingIds - task.id
             }
         }
     }
@@ -143,6 +168,7 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
 
     val byDay = remember(tasks) { tasks.groupBy { it.dueOn } }
     val selectedTasks = byDay[selected.toString()].orEmpty()
+    val selectedDone = selectedTasks.count { it.done }
     val first = month.atDay(1)
     val gridStart = first.minusDays((first.dayOfWeek.value - 1).toLong())
     val cells = (0 until 42).map { gridStart.plusDays(it.toLong()) }
@@ -211,7 +237,7 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
             }
             Spacer(Modifier.weight(1f))
             Text(
-                "${selectedTasks.size} 条",
+                if (selectedDone > 0) "${selectedTasks.size} 条 · 已完成 $selectedDone" else "${selectedTasks.size} 条",
                 style = MaterialTheme.typography.labelSmall,
                 color = InkSoft,
             )
@@ -220,12 +246,37 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         notice?.let {
             Notice(it, Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
         }
+        loadError?.let {
+            Notice(
+                it,
+                Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                actionLabel = "重试",
+                onAction = { reload++ },
+            )
+        }
 
         when {
             loading && tasks.isEmpty() -> Box(
                 Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp, vertical = 20.dp),
             ) {
                 Text("读待办…", style = MaterialTheme.typography.bodySmall, color = InkSoft)
+            }
+
+            tasks.isEmpty() && loadError != null -> Column(
+                Modifier.weight(1f).fillMaxWidth().padding(horizontal = 20.dp),
+                verticalArrangement = Arrangement.Center,
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                Text(
+                    "待办没读出来",
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = InkSoft,
+                )
+                Text(
+                    "点上面的重试再读一次",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = InkSoft,
+                )
             }
 
             selectedTasks.isEmpty() -> Column(
@@ -275,7 +326,7 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
             IconAction(
                 DeskIcon.Add,
                 "加一条",
-                enabled = !busy && draft.isNotBlank(),
+                enabled = addEnabled && draft.isNotBlank(),
                 onClick = { addTask() },
             )
         }
@@ -327,7 +378,7 @@ private fun DayCell(
             .background(if (isSelected) Vermilion else Color.Transparent)
             // 今天没选中时不靠颜色深浅区分：朱色数字加 1dp 朱框，和选中是两种形状。
             .then(if (isToday && !isSelected) Modifier.border(1.dp, Vermilion) else Modifier)
-            .clickable(onClick = onClick)
+            .clickable(onClickLabel = "选中这一天", onClick = onClick)
             .padding(horizontal = 3.dp, vertical = 2.dp),
     ) {
         Column(
@@ -361,11 +412,12 @@ private fun DayCell(
 private fun DayTaskRow(task: Task, enabled: Boolean, onToggle: () -> Unit) {
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 11.dp),
+            // 和待办页同一套对齐：32dp 触摸区里的 18dp 方框仍落在 20dp 线上。
+            Modifier.fillMaxWidth().padding(start = 13.dp, end = 20.dp, top = 4.dp, bottom = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TaskCheckbox(checked = task.done, onToggle = onToggle, enabled = enabled)
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(4.dp))
             Text(
                 task.body,
                 style = MaterialTheme.typography.bodyLarge,

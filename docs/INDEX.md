@@ -37,9 +37,11 @@
 | [decisions/0017-drawn-line-icons.md](decisions/0017-drawn-line-icons.md) | 生效中 | 加/刷新/删三个短动词改用 `Components.kt` 里自绘的线条字形，装在 40dp 方框里；删除第二次确认靠盖一枚朱色方框，不用 material-icons |
 | [decisions/0018-launcher-icon-ink-mark.md](decisions/0018-launcher-icon-ink-mark.md) | 生效中 | 启动图标是一张自适应图标——墨底 `#1B1C18` 上画纸色描边 M，最后一笔收进一枚转了 -3° 的朱色方印；只有 anydpi-v26 那份矢量加单色层，不铺各密度位图 |
 | [decisions/0019-refresh-only-on-reports.md](decisions/0019-refresh-only-on-reports.md) | 生效中 | 三屏各一枚刷新图标收成一枚——只留报表页；记录与待办页靠"进屏即重拉、写失败自动回滚重拉"，跨设备的新内容切走页签再回来才看得见 |
-| [decisions/0020-inline-task-edit.md](decisions/0020-inline-task-edit.md) | 生效中 | 待办正文点开就在这一行里改：回车保存、返回放弃，只发 `{body}`；名次、完成态、勾掉时刻与报表归属都不动 |
+| [decisions/0020-inline-task-edit.md](decisions/0020-inline-task-edit.md) | 已废弃（被 0023 取代） | 待办正文点开就在这一行里改：回车保存、返回放弃，只发 `{body}`；名次、完成态、勾掉时刻与报表归属都不动 |
 | [decisions/0021-calendar-dated-tasks.md](decisions/0021-calendar-dated-tasks.md) | 生效中 | 待办带安排日期 `due_on`，日历按天看同一批待办，在日历某天加的照样进待办页；不另建日历表，不做提醒、重复、子任务 |
 | [decisions/0022-download-write-deadline.md](decisions/0022-download-write-deadline.md) | 生效中 | 更新包下载这一条响应把 HTTP/2 单流写期限放宽到十分钟，全局 `WriteTimeout` 仍 60 秒；日志包装层补 `Unwrap` 让 `ResponseController` 能穿透 |
+| [decisions/0023-task-edit-explicit-save-and-reschedule.md](decisions/0023-task-edit-explicit-save-and-reschedule.md) | 生效中 | 待办行内编辑换成可换行输入框，行尾常驻对勾作显式保存；正文下可直接开日期选择器改 `due_on`；只发改动过的字段 |
+| [decisions/0024-per-row-toggle-and-state-keeping.md](decisions/0024-per-row-toggle-and-state-keeping.md) | 生效中 | 勾选按行排队只锁被勾那行，加/删/拖序等队列清空；进屏加载失败给「重试」；四页签的选中日、展开与草稿跨切换保留 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
 | [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 三张表的字段与归属算法（待办含安排日期）、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
 | [design/android-client.md](design/android-client.md) | 生效中 | 手机端七屏划分（含日历）、本地只存哪五样、十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |

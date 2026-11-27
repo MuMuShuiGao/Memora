@@ -68,7 +68,9 @@ class MemoApi(private val baseUrl: String) {
     suspend fun createTask(body: String, dueOn: String): Task =
         sendBody("POST", "/v1/tasks", TaskCreateRequest(body, dueOn))
 
-    suspend fun updateTaskBody(id: Long, body: String): Task = patch("/v1/tasks/$id", body)
+    // 正文与安排日期可以一起改：空着的字段不往请求里放，服务端只动收到的那几列。
+    suspend fun updateTask(id: Long, body: String? = null, dueOn: String? = null): Task =
+        sendBody("PATCH", "/v1/tasks/$id", TaskUpdateRequest(body, dueOn))
 
     suspend fun setTaskDone(id: Long, done: Boolean): Task =
         sendBody("PATCH", "/v1/tasks/$id", DoneRequest(done))
@@ -235,6 +237,13 @@ class MemoApi(private val baseUrl: String) {
 
     @Serializable
     private data class TaskCreateRequest(val body: String, @SerialName("due_on") val dueOn: String)
+
+    // explicitNulls=false：没改的那一项不出现，PATCH 才不会被解成"把它清空"。
+    @Serializable
+    private data class TaskUpdateRequest(
+        val body: String? = null,
+        @SerialName("due_on") val dueOn: String? = null,
+    )
 
     @Serializable
     private data class DoneRequest(val done: Boolean)

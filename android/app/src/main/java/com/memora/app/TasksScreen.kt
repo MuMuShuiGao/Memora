@@ -19,10 +19,16 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.selection.toggleable
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
+import androidx.compose.material3.DatePicker
+import androidx.compose.material3.DatePickerDefaults
+import androidx.compose.material3.DatePickerDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
+import androidx.compose.material3.rememberDatePickerState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -41,6 +47,8 @@ import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.text.style.TextOverflow
@@ -58,31 +66,46 @@ private const val TOP_COUNT = 5
 @Composable
 fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     val scope = rememberCoroutineScope()
-    var draft by remember { mutableStateOf("") }
+    val focusManager = LocalFocusManager.current
+    var draft by rememberSaveable { mutableStateOf("") }
     var tasks by remember { mutableStateOf<List<Task>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
-    // 有一条写在飞的时候锁住所有写入口：待办的顺序是整列一次提交的（design §5.1），
-    // 两次写交叠出去会留下一个服务端对不上的排列。
+    // 结构写（加、删、拖序）仍然互斥：顺序是整列一次提交的，两次交叠会留下服务端对不上的排列。
     var busy by remember { mutableStateOf(false) }
+    // 勾选不跟着 busy 一起吞点击：一次只锁住正在飞的那一行，别行照常勾。
+    var togglingIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
     var notice by remember { mutableStateOf<String?>(null) }
+    var loadError by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
     var expanded by rememberSaveable { mutableStateOf(false) }
+    var doneExpanded by rememberSaveable { mutableStateOf(false) }
     // 删走编辑页那套连点两次，记的是"已经点过一次、正等确认"的那一条。
     // 同时只认一条：点别处或点上另一只垃圾桶，旧的那次确认就作废。
     var armedId by remember { mutableStateOf<Long?>(null) }
-    // 正改着的那一条与它的草稿。草稿不落盘：一句话的修改不值得再建一套草稿机制（ADR-0020）。
+    // 正改着的那一条、它的草稿和改期中的日期。草稿不落盘：一句话的修改不值得再建一套草稿机制（ADR-0020）。
     var editingId by remember { mutableStateOf<Long?>(null) }
     var editDraft by remember { mutableStateOf("") }
+    var editDueOn by remember { mutableStateOf("") }
+    var pickingDate by remember { mutableStateOf(false) }
 
     val drag = remember { DragState() }
+    // 结构写要让路给还在飞的勾选；勾选本身只锁自己那一行。
+    val structuralEnabled = !busy && togglingIds.isEmpty()
 
     LaunchedEffect(reload) {
         loading = true
-        notice = null
+        loadError = null
         try {
             tasks = api.listTasks().tasks
+            // 只有读成功才撤掉上一条写错误：失败时由 error 分支统一改写。
+            notice = null
         } catch (e: ApiError) {
-            if (e.kind == ApiError.Kind.Unauthorized) onUnauthorized() else notice = describe(e)
+            if (e.kind == ApiError.Kind.Unauthorized) {
+                onUnauthorized()
+            } else {
+                loadError = describe(e)
+                notice = null
+            }
         } finally {
             loading = false
         }
@@ -110,7 +133,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
 
     fun addTask() {
         val text = draft.trim()
-        if (text.isEmpty() || busy) return
+        if (text.isEmpty() || !structuralEnabled) return
         armedId = null
         runWrite {
             val created = api.createTask(text, today().toString())
@@ -120,21 +143,41 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         }
     }
 
-    // 改正文不经过 busy：它不碰顺序，和勾选/拖拽撞不上（ADR-0020）。失败仍走统一的回滚重拉。
+    // 改正文与日期不碰顺序，不进 busy；勾选那一路可能同时在飞，所以只合自己发出去的字段。
     fun commitEdit() {
         val id = editingId ?: return
         val original = tasks.firstOrNull { it.id == id }
         val text = editDraft.trim()
+        val due = editDueOn.ifEmpty { original?.dueOn.orEmpty() }
         editingId = null
         editDraft = ""
-        if (original == null || text.isEmpty() || text == original.body) return
-        tasks = tasks.map { if (it.id == id) it.copy(body = text) else it }
+        editDueOn = ""
+        pickingDate = false
+        if (original == null || text.isEmpty()) return
+        val bodyChanged = text != original.body
+        val dueChanged = due.isNotEmpty() && due != original.dueOn
+        if (!bodyChanged && !dueChanged) return
+        tasks = tasks.map {
+            if (it.id == id) it.copy(
+                body = if (bodyChanged) text else it.body,
+                dueOn = if (dueChanged) due else it.dueOn,
+            ) else it
+        }
         scope.launch {
             notice = null
             try {
-                // 只合正文：勾选那一路可能还有一次 PATCH 在飞，整条覆盖会把它的结果抹回去。
-                val got = api.updateTaskBody(id, text)
-                tasks = tasks.map { if (it.id == id) it.copy(body = got.body) else it }
+                val got = api.updateTask(
+                    id,
+                    body = if (bodyChanged) text else null,
+                    dueOn = if (dueChanged) due else null,
+                )
+                // 只合发出去的那两项：勾选那一路的结果不能被整条覆盖抹回去。
+                tasks = tasks.map {
+                    if (it.id == id) it.copy(
+                        body = got.body,
+                        dueOn = got.dueOn,
+                    ) else it
+                }
             } catch (e: ApiError) {
                 if (e.kind == ApiError.Kind.Unauthorized) {
                     onUnauthorized()
@@ -149,30 +192,37 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     fun cancelEdit() {
         editingId = null
         editDraft = ""
+        editDueOn = ""
+        pickingDate = false
     }
 
     fun startEdit(task: Task) {
-        if (busy || editingId == task.id) return
+        // 结构写进行中不翻编辑；只是别行在勾选时，照常可以点开改字（PATCH 按字段更新）。
+        if (busy || task.id in togglingIds || editingId == task.id) return
         // 换一条改时先把上一条落定，否则那段字会随编辑态一起无声消失。
         commitEdit()
         // 手里拿着删除确认又点开正文，说明意图已经换了；不清掉的话下一次点垃圾桶就是真删。
         armedId = null
         editingId = task.id
         editDraft = task.body
+        editDueOn = task.dueOn
+        pickingDate = false
     }
 
     fun toggle(task: Task) {
-        if (busy) return
+        // 一次只锁这一行：别行还能继续勾，连点同一行也不会叠出两次 PATCH。
+        if (busy || task.id in togglingIds) return
         // 勾选也是"点了别处"：删除确认在等的是一个和勾选无关的第二次点击。
         armedId = null
         // 勾的是正改着的那条：先把字存了再勾，否则用户勾完会发现刚才的修改没落。
         if (editingId == task.id) commitEdit()
         // 现取而不是用组合里那份快照：这一行的正文可能刚在 commitEdit 里换过。
         val current = tasks.firstOrNull { it.id == task.id } ?: return
-        val snapshot = tasks
         val toDone = !current.done
-        tasks = snapshot.relocate(current.copy(done = toDone))
-        runWrite {
+        tasks = tasks.relocate(current.copy(done = toDone))
+        togglingIds = togglingIds + task.id
+        scope.launch {
+            notice = null
             try {
                 val got = api.setTaskDone(current.id, toDone)
                 // 只合完成态那几列，别把正文那条可能还在飞的 PATCH 抹回去。
@@ -181,14 +231,27 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                     ?: got
                 tasks = tasks.relocate(merged)
             } catch (e: ApiError) {
-                tasks = snapshot
-                throw e
+                if (e.kind == ApiError.Kind.Unauthorized) {
+                    onUnauthorized()
+                } else {
+                    // 退回完成态，正文保留此刻用户可能已经改过的那份；顺序交给随后的重拉。
+                    val reverted = tasks.firstOrNull { it.id == current.id }?.copy(
+                        done = current.done,
+                        doneAt = current.doneAt,
+                        doneWeekStart = current.doneWeekStart,
+                    )
+                    if (reverted != null) tasks = tasks.relocate(reverted)
+                    notice = describe(e)
+                    reload++
+                }
+            } finally {
+                togglingIds = togglingIds - task.id
             }
         }
     }
 
     fun removeTask(task: Task) {
-        if (busy) return
+        if (!structuralEnabled) return
         // 删的就是正改着的那条：不必先存一遍再删。
         if (editingId == task.id) cancelEdit()
         val snapshot = tasks
@@ -205,7 +268,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     }
 
     fun commitOrder(from: Int, to: Int) {
-        if (busy || from == to) return
+        if (!structuralEnabled || from == to) return
         // 现取而不是用组合里派生好的那份：松手这一帧之前列表可能已经换过。
         val order = tasks.filter { !it.done }.toMutableList()
         if (from !in order.indices || to !in order.indices) return
@@ -222,10 +285,12 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         }
     }
 
+    // 日历弹窗先吃一次返回，别让返回键把整屏编辑一起丢掉。
+    BackHandler(enabled = pickingDate) { pickingDate = false }
     // 返回键放弃这次修改；键盘开着时那一下先由系统收键盘。
-    BackHandler(enabled = editingId != null) { cancelEdit() }
+    BackHandler(enabled = !pickingDate && editingId != null) { cancelEdit() }
     // 删除确认也吃一次返回：正等着第二次点击时，返回键不该直接退出应用。
-    BackHandler(enabled = editingId == null && armedId != null) { armedId = null }
+    BackHandler(enabled = !pickingDate && editingId == null && armedId != null) { armedId = null }
 
     val open = tasks.filter { !it.done }
     val done = tasks.filter { it.done }
@@ -258,7 +323,12 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                 onSubmit = { addTask() },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
-            IconAction(DeskIcon.Add, "加一条", enabled = !busy && draft.isNotBlank(), onClick = { addTask() })
+            IconAction(
+                DeskIcon.Add,
+                "加一条",
+                enabled = structuralEnabled && draft.isNotBlank(),
+                onClick = { addTask() },
+            )
         }
         Text(
             "未完成 ${open.size} · 已完成 ${done.size}",
@@ -270,6 +340,14 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         notice?.let {
             Notice(it, Modifier.padding(horizontal = 20.dp, vertical = 10.dp))
         }
+        loadError?.let {
+            Notice(
+                it,
+                Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                actionLabel = "重试",
+                onAction = { reload++ },
+            )
+        }
 
         when {
             loading && tasks.isEmpty() -> Text(
@@ -277,6 +355,13 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                 style = MaterialTheme.typography.bodySmall,
                 color = InkSoft,
                 modifier = Modifier.padding(horizontal = 20.dp, vertical = 24.dp),
+            )
+
+            tasks.isEmpty() && loadError != null -> Text(
+                "待办没读出来，点上面的重试再读一次",
+                style = MaterialTheme.typography.bodyMedium,
+                color = InkSoft,
+                modifier = Modifier.padding(horizontal = 20.dp, vertical = 28.dp),
             )
 
             tasks.isEmpty() -> Text(
@@ -298,14 +383,22 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                         index = index,
                         drag = drag,
                         ids = visible.map { it.id },
-                        draggable = visible.size > 1 && !busy,
+                        draggable = visible.size > 1 && structuralEnabled,
                         enabled = !busy,
+                        structuralEnabled = structuralEnabled,
+                        togglePending = task.id in togglingIds,
                         armed = armedId == task.id,
                         editing = editingId == task.id,
                         editDraft = editDraft,
+                        editDueOn = editDueOn,
                         onEditStart = { startEdit(task) },
                         onEditChange = { editDraft = it },
                         onEditCommit = { commitEdit() },
+                        onPickDate = {
+                            // 只调键盘的 hide() 不够：输入框还攥着焦点，日期面板会和键盘抢同一块地方。
+                            focusManager.clearFocus(force = true)
+                            pickingDate = true
+                        },
                         onArm = { armedId = task.id },
                         onClear = { armedId = null },
                         onDelete = { removeTask(task) },
@@ -340,36 +433,74 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
 
                 if (done.isNotEmpty()) {
                     SectionRule(Modifier.padding(top = 20.dp))
-                    Text(
-                        "已完成",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = InkSoft,
-                        modifier = Modifier.padding(start = 20.dp, top = 8.dp, bottom = 2.dp),
-                    )
-                    done.forEach { task ->
-                        TaskRow(
-                            task = task,
-                            index = -1,
-                            drag = drag,
-                            ids = emptyList(),
-                            draggable = false,
-                            enabled = !busy,
-                            armed = armedId == task.id,
-                            editing = editingId == task.id,
-                            editDraft = editDraft,
-                            onEditStart = { startEdit(task) },
-                            onEditChange = { editDraft = it },
-                            onEditCommit = { commitEdit() },
-                            onArm = { armedId = task.id },
-                            onClear = { armedId = null },
-                            onDelete = { removeTask(task) },
-                            onToggle = { toggle(task) },
-                            onCommit = { _, _ -> },
+                    Row(
+                        Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp),
+                        verticalAlignment = Alignment.CenterVertically,
+                    ) {
+                        Text(
+                            "已完成 ${done.size}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = InkSoft,
+                            modifier = Modifier.weight(1f),
                         )
+                        TextAction(
+                            if (doneExpanded) "收起" else "展开",
+                            onClick = {
+                                if (doneExpanded) {
+                                    // 收起时把那一条正在改的字一起收掉，别让编辑态悬在屏外。
+                                    if (editingId != null && done.any { it.id == editingId }) cancelEdit()
+                                    armedId = null
+                                }
+                                doneExpanded = !doneExpanded
+                            },
+                            enabled = !busy,
+                        )
+                    }
+                    if (doneExpanded) {
+                        done.forEach { task ->
+                            TaskRow(
+                                task = task,
+                                index = -1,
+                                drag = drag,
+                                ids = emptyList(),
+                                draggable = false,
+                                enabled = !busy,
+                                structuralEnabled = structuralEnabled,
+                                togglePending = task.id in togglingIds,
+                                armed = armedId == task.id,
+                                editing = editingId == task.id,
+                                editDraft = editDraft,
+                                editDueOn = editDueOn,
+                                onEditStart = { startEdit(task) },
+                                onEditChange = { editDraft = it },
+                                onEditCommit = { commitEdit() },
+                                onPickDate = {
+                                    focusManager.clearFocus(force = true)
+                                    pickingDate = true
+                                },
+                                onArm = { armedId = task.id },
+                                onClear = { armedId = null },
+                                onDelete = { removeTask(task) },
+                                onToggle = { toggle(task) },
+                                onCommit = { _, _ -> },
+                            )
+                        }
                     }
                 }
             }
         }
+    }
+
+    if (pickingDate) {
+        val fallback = tasks.firstOrNull { it.id == editingId }?.dueOn ?: today().toString()
+        DueDateDialog(
+            initialDay = editDueOn.ifEmpty { fallback },
+            onPick = {
+                editDueOn = it
+                pickingDate = false
+            },
+            onDismiss = { pickingDate = false },
+        )
     }
 }
 
@@ -434,12 +565,16 @@ private fun TaskRow(
     ids: List<Long>,
     draggable: Boolean,
     enabled: Boolean,
+    structuralEnabled: Boolean,
+    togglePending: Boolean,
     armed: Boolean,
     editing: Boolean,
     editDraft: String,
+    editDueOn: String,
     onEditStart: () -> Unit,
     onEditChange: (String) -> Unit,
     onEditCommit: () -> Unit,
+    onPickDate: () -> Unit,
     onArm: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
@@ -461,14 +596,16 @@ private fun TaskRow(
             .onSizeChanged { size -> drag.heights[task.id] = size.height.toFloat() }
     ) {
         Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 12.dp, bottom = 12.dp),
+            // 复选框的触摸区是 32dp，视觉仍是 18dp：左边让出 13dp 加上框内留白，
+            // 18dp 方框还是落在原来的 20dp 线上，正文也从原来的 49dp 起排。
+            Modifier.fillMaxWidth().padding(start = 13.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
             TaskCheckbox(checked = task.done, onToggle = onToggle, enabled = enabled)
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(4.dp))
             Column(Modifier.weight(1f)) {
                 if (editing) {
-                    // 点正文就地改：同一个 UnderlineField，回车落定、返回放弃（ADR-0020）。
+                    // 点正文就地改：行尾的对勾是显式落定，多行不再靠回车（ADR-0023）。
                     val focus = remember { FocusRequester() }
                     LaunchedEffect(Unit) { focus.requestFocus() }
                     UnderlineField(
@@ -476,9 +613,19 @@ private fun TaskRow(
                         onValueChange = onEditChange,
                         placeholder = "改这一句",
                         focusRequester = focus,
+                        singleLine = false,
+                        minLines = 1,
+                        maxLines = 4,
                         keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                         onSubmit = onEditCommit,
                         textStyle = MaterialTheme.typography.bodyLarge,
+                    )
+                    val due = editDueOn.ifEmpty { task.dueOn }
+                    TextAction(
+                        "改期 · ${dueText(due)}",
+                        onClick = onPickDate,
+                        enabled = enabled,
+                        color = if (isOverdue(due, task.done)) Vermilion else InkSoft,
                     )
                 } else {
                     Text(
@@ -488,7 +635,7 @@ private fun TaskRow(
                         textDecoration = if (task.done) TextDecoration.LineThrough else null,
                         maxLines = 2,
                         overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.clickable(enabled = enabled, onClick = onEditStart),
+                        modifier = Modifier.clickable(enabled = enabled && !togglePending, onClick = onEditStart),
                     )
                     task.doneAt?.let {
                         // 只给日期：归哪一周是服务端在勾掉那一刻算死的（design §2），
@@ -500,12 +647,20 @@ private fun TaskRow(
                         )
                     }
                     // 安排日期不是今天才写出来：今天的条目已经站在今天这一屏里，
-                    // 再印一遍日期只是噪音。
+                    // 再印一遍日期只是噪音。过期的未完成条目标朱，点它直接开改期。
                     if (task.dueOn.isNotEmpty() && task.dueOn != today().toString()) {
+                        val overdue = isOverdue(task.dueOn, task.done)
                         Text(
-                            "安排 · ${dueText(task.dueOn)}",
+                            if (overdue) "已过期 · ${dueText(task.dueOn)}" else "安排 · ${dueText(task.dueOn)}",
                             style = MaterialTheme.typography.labelSmall,
-                            color = InkSoft,
+                            color = if (overdue) Vermilion else InkSoft,
+                            modifier = Modifier.clickable(
+                                enabled = enabled && !togglePending,
+                                onClick = {
+                                    onEditStart()
+                                    onPickDate()
+                                },
+                            ),
                         )
                     }
                 }
@@ -515,7 +670,7 @@ private fun TaskRow(
                     DeskIcon.Delete,
                     if (armed) "确认删" else "删",
                     armed = armed,
-                    enabled = enabled,
+                    enabled = structuralEnabled,
                     color = InkSoft,
                     onClick = {
                         if (!armed) onArm() else {
@@ -547,33 +702,96 @@ private fun TaskRow(
                 } else {
                     Spacer(Modifier.width(26.dp))
                 }
+            } else {
+                IconAction(
+                    DeskIcon.Check,
+                    "保存",
+                    enabled = enabled,
+                    onClick = onEditCommit,
+                )
             }
         }
         Hairline(Modifier.padding(horizontal = 20.dp))
     }
 }
 
-// 18dp 空心方框，勾上填墨色再压一道纸色对勾。不用 Material 的 Checkbox：它的圆角底
-// 和水波纹跟这片纸不搭（ADR-0013）。对勾是画出来的，不是字符——换字体字符会变成方框。
+// 外圈 32dp 是触摸区，里面 18dp 空心方框才是视觉：手指不用瞄准一个小方格。
+// 勾上填墨色再压一道纸色对勾。不用 Material 的 Checkbox：它的圆角底和水波纹跟这片纸不搭（ADR-0013）。
+// 对勾是画出来的，不是字符——换字体字符会变成方框。
 @Composable
 fun TaskCheckbox(checked: Boolean, onToggle: () -> Unit, enabled: Boolean) {
     Box(
         Modifier
-            .size(18.dp)
-            .background(if (checked) Ink else Color.Transparent)
-            // 直角：印章和方框保持直角，2dp 圆角只留给按钮（ADR-0013）。
-            .border(width = if (checked) 0.dp else 1.dp, color = if (enabled) Ink else RuleLine)
-            .clickable(enabled = enabled, onClick = onToggle),
+            .size(32.dp)
+            .toggleable(
+                value = checked,
+                enabled = enabled,
+                role = Role.Checkbox,
+                onValueChange = { onToggle() },
+            ),
         contentAlignment = Alignment.Center,
     ) {
-        if (checked) {
-            Canvas(Modifier.size(18.dp)) {
-                val s = size.width
-                val w = s * 0.1f
-                drawLine(Paper, Offset(s * 0.22f, s * 0.52f), Offset(s * 0.42f, s * 0.72f), w, cap = StrokeCap.Round)
-                drawLine(Paper, Offset(s * 0.42f, s * 0.72f), Offset(s * 0.8f, s * 0.28f), w, cap = StrokeCap.Round)
+        Box(
+            Modifier
+                .size(18.dp)
+                .background(if (checked) Ink else Color.Transparent)
+                // 直角：印章和方框保持直角，2dp 圆角只留给按钮（ADR-0013）。
+                .border(width = if (checked) 0.dp else 1.dp, color = if (enabled) Ink else RuleLine),
+            contentAlignment = Alignment.Center,
+        ) {
+            if (checked) {
+                Canvas(Modifier.size(18.dp)) {
+                    val s = size.width
+                    val w = s * 0.1f
+                    drawLine(Paper, Offset(s * 0.22f, s * 0.52f), Offset(s * 0.42f, s * 0.72f), w, cap = StrokeCap.Round)
+                    drawLine(Paper, Offset(s * 0.42f, s * 0.72f), Offset(s * 0.8f, s * 0.28f), w, cap = StrokeCap.Round)
+                }
             }
         }
+    }
+}
+
+// 只借系统的日期网格，颜色与直角沿用案头这套；选中即回填，落定仍走行尾的对勾。
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun DueDateDialog(
+    initialDay: String,
+    onPick: (String) -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val state = rememberDatePickerState(
+        initialSelectedDateMillis = dayToUtcMillis(initialDay) ?: dayToUtcMillis(today().toString()),
+    )
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextAction(
+                "改到这一天",
+                onClick = { state.selectedDateMillis?.let { onPick(millisToDay(it)) } },
+                enabled = state.selectedDateMillis != null,
+            )
+        },
+        dismissButton = {
+            TextAction("取消", onClick = onDismiss, color = InkSoft)
+        },
+    ) {
+        DatePicker(
+            state = state,
+            title = null,
+            headline = null,
+            showModeToggle = false,
+            colors = DatePickerDefaults.colors(
+                containerColor = Paper,
+                titleContentColor = Ink,
+                headlineContentColor = Ink,
+                weekdayContentColor = InkSoft,
+                dayContentColor = Ink,
+                selectedDayContentColor = Paper,
+                selectedDayContainerColor = Vermilion,
+                todayContentColor = Vermilion,
+                todayDateBorderColor = Vermilion,
+            ),
+        )
     }
 }
 

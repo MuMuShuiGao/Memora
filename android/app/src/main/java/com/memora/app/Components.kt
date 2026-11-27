@@ -82,6 +82,8 @@ fun UnderlineField(
     label: String? = null,
     placeholder: String = "",
     singleLine: Boolean = true,
+    minLines: Int = 1,
+    maxLines: Int = if (singleLine) 1 else Int.MAX_VALUE,
     keyboardOptions: KeyboardOptions = KeyboardOptions.Default,
     // 回车即交出去那条。默认什么都不做，所以搜索框那类调用方不必管它。
     onSubmit: () -> Unit = {},
@@ -101,6 +103,8 @@ fun UnderlineField(
             value = value,
             onValueChange = onValueChange,
             singleLine = singleLine,
+            minLines = minLines,
+            maxLines = maxLines,
             textStyle = textStyle.copy(color = Ink),
             cursorBrush = SolidColor(Vermilion),
             keyboardOptions = keyboardOptions,
@@ -119,7 +123,7 @@ fun UnderlineField(
                             placeholder,
                             style = textStyle,
                             color = InkSoft.copy(alpha = 0.6f),
-                            maxLines = 1,
+                            maxLines = if (singleLine) 1 else 2,
                         )
                     }
                     inner()
@@ -208,7 +212,7 @@ fun TextAction(
     }
 }
 
-enum class DeskIcon { Add, Refresh, Delete, Prev, Next }
+enum class DeskIcon { Add, Refresh, Delete, Prev, Next, Check }
 
 // 按进这块区域的任何地方都先撤掉"等第二次确认"的删除。走 Initial 阶段只看不吃：
 // 输入框的光标、选区与点击照常；挂在外层，因为子控件会把 Main 阶段的点击吃掉。
@@ -257,6 +261,7 @@ fun IconAction(
                 DeskIcon.Delete -> deleteGlyph(tint)
                 DeskIcon.Prev -> chevronGlyph(tint, left = true)
                 DeskIcon.Next -> chevronGlyph(tint, left = false)
+                DeskIcon.Check -> checkGlyph(tint)
             }
         }
     }
@@ -299,6 +304,14 @@ private fun DrawScope.refreshGlyph(color: Color) {
         close()
     }
     drawPath(head, color)
+}
+
+// 行内编辑的保存键。和勾选框里的对勾同一笔势，只是放大到图标尺度。
+private fun DrawScope.checkGlyph(color: Color) {
+    val s = size.width
+    val w = s * 0.09f
+    drawLine(color, Offset(s * 0.18f, s * 0.52f), Offset(s * 0.42f, s * 0.76f), w, cap = StrokeCap.Round)
+    drawLine(color, Offset(s * 0.42f, s * 0.76f), Offset(s * 0.84f, s * 0.26f), w, cap = StrokeCap.Round)
 }
 
 // 日历翻月用的尖角，只有两笔，线宽与其它图标一致。
@@ -383,9 +396,15 @@ fun StatusStamp(text: String, color: Color, modifier: Modifier = Modifier) {
     }
 }
 
-// 错误与提醒不弹窗，在发生的位置盖一枚小朱点。
+// 错误与提醒不弹窗，在发生的位置盖一枚小朱点。加载失败时把"重试"留在同一行，
+// 不另起一个常驻刷新按钮（ADR-0019 的刷新口径不变）。
 @Composable
-fun Notice(text: String, modifier: Modifier = Modifier) {
+fun Notice(
+    text: String,
+    modifier: Modifier = Modifier,
+    actionLabel: String? = null,
+    onAction: (() -> Unit)? = null,
+) {
     Row(modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
         Box(
             Modifier
@@ -395,6 +414,14 @@ fun Notice(text: String, modifier: Modifier = Modifier) {
                 .background(Vermilion),
         )
         Spacer(Modifier.width(8.dp))
-        Text(text, style = MaterialTheme.typography.labelMedium, color = Vermilion)
+        Text(
+            text,
+            style = MaterialTheme.typography.labelMedium,
+            color = Vermilion,
+            modifier = Modifier.weight(1f),
+        )
+        if (actionLabel != null && onAction != null) {
+            TextAction(actionLabel, onClick = onAction, color = Vermilion)
+        }
     }
 }

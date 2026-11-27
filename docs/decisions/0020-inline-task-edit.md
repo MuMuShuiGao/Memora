@@ -1,6 +1,6 @@
 # ADR-0020：待办正文在行内改
 
-> 状态：生效中
+> 状态：已废弃（被 0023 取代）
 > 摘要：待办正文点开就在这一行里改：回车保存、返回放弃，只发 `{body}`；名次、完成态、勾掉时刻与报表归属都不动
 > 日期：2026-11-27 ｜ 关联：[ADR-0014](0014-todo-tasks-with-priority.md)、[ADR-0017](0017-drawn-line-icons.md)、[design/android-client.md](../design/android-client.md)、[design/memo-and-report.md](../design/memo-and-report.md)
 

@@ -20,6 +20,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
@@ -89,6 +90,9 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
     // "正在看更新页"不进 savedInstanceState：装完包进程会被系统换掉，
     // 重启后回到正常首屏，那句"刚装好"由更新页自己的状态带出来。
     var showUpdate by remember { mutableStateOf(false) }
+    // 切页签、进编辑页都会把当前屏整块拆掉；把 rememberSaveable 的那部分（选中日、
+    // 展开状态、没发出去的草稿）按页签存住，回来时不用重新挑一遍。
+    val tabStates = rememberSaveableStateHolder()
 
     val target = editing
     if (target != null) {
@@ -120,16 +124,18 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
                     .clickable(onClick = { showUpdate = true }),
             )
         }
-        when (tab) {
-            TAB_NOTES -> NotesScreen(api, onForgetPassphrase) { note ->
-                editing = Editing(note)
+        tabStates.SaveableStateProvider(tab) {
+            when (tab) {
+                TAB_NOTES -> NotesScreen(api, onForgetPassphrase) { note ->
+                    editing = Editing(note)
+                }
+
+                TAB_TASKS -> TasksScreen(api, onForgetPassphrase)
+
+                TAB_CALENDAR -> CalendarScreen(api, onForgetPassphrase)
+
+                else -> ReportsScreen(api, local, onForgetPassphrase)
             }
-
-            TAB_TASKS -> TasksScreen(api, onForgetPassphrase)
-
-            TAB_CALENDAR -> CalendarScreen(api, onForgetPassphrase)
-
-            else -> ReportsScreen(api, local, onForgetPassphrase)
         }
     }
 }
