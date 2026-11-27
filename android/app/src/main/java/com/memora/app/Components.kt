@@ -3,6 +3,7 @@ package com.memora.app
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.spring
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.foundation.text.KeyboardActions
@@ -37,13 +39,23 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.drawscope.DrawScope
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
+import kotlin.math.PI
+import kotlin.math.cos
+import kotlin.math.sin
 
 @Composable
 fun Hairline(modifier: Modifier = Modifier, color: Color = RuleLine) {
@@ -187,6 +199,108 @@ fun TextAction(
     ) {
         Text(text, style = MaterialTheme.typography.labelMedium)
     }
+}
+
+enum class DeskIcon { Add, Refresh, Delete }
+
+// "加 / 刷新 / 删"这类短动词换成线条符号，省下的横向宽度还给正文。
+// 字形自绘而不用 material-icons：那套是实心字形，笔画和这片发丝线不是一套东西
+// （同 ADR-0013 不用 Material Checkbox 的理由）。名称走 contentDescription，
+// 屏幕上不再出现这几个字。
+@Composable
+fun IconAction(
+    icon: DeskIcon,
+    label: String,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    color: Color = Ink,
+    // 删除要连点两次（design §交互）：第一次靠盖一枚朱色方框改变外观，而不是改成另一个字。
+    armed: Boolean = false,
+) {
+    val tint = when {
+        !enabled -> InkSoft.copy(alpha = 0.45f)
+        armed -> Vermilion
+        else -> color
+    }
+    Box(
+        modifier
+            .size(40.dp)
+            .then(if (armed) Modifier.border(1.5.dp, Vermilion) else Modifier)
+            .semantics { contentDescription = label }
+            .clickable(enabled = enabled, onClick = onClick),
+        contentAlignment = Alignment.Center,
+    ) {
+        Canvas(Modifier.size(20.dp)) {
+            when (icon) {
+                DeskIcon.Add -> addGlyph(tint)
+                DeskIcon.Refresh -> refreshGlyph(tint)
+                DeskIcon.Delete -> deleteGlyph(tint)
+            }
+        }
+    }
+}
+
+private fun DrawScope.addGlyph(color: Color) {
+    val s = size.width
+    val w = s * 0.09f
+    drawLine(color, Offset(s * 0.5f, s * 0.16f), Offset(s * 0.5f, s * 0.84f), w)
+    drawLine(color, Offset(s * 0.16f, s * 0.5f), Offset(s * 0.84f, s * 0.5f), w)
+}
+
+// 圆留 60° 缺口，弧头朝切线方向压出一枚实心三角。
+private fun DrawScope.refreshGlyph(color: Color) {
+    val s = size.width
+    val w = s * 0.09f
+    val r = s * 0.38f
+    val c = Offset(s / 2f, s / 2f)
+    drawArc(
+        color,
+        startAngle = 0f,
+        sweepAngle = 300f,
+        useCenter = false,
+        topLeft = Offset(c.x - r, c.y - r),
+        size = Size(r * 2f, r * 2f),
+        style = Stroke(width = w),
+    )
+    val a = 300.0 * PI / 180.0
+    val nx = cos(a).toFloat()
+    val ny = sin(a).toFloat()
+    val px = c.x + r * nx
+    val py = c.y + r * ny
+    // 顺时针走到这一点时的切线
+    val tx = -ny
+    val ty = nx
+    val head = Path().apply {
+        moveTo(px + tx * s * 0.22f, py + ty * s * 0.22f)
+        lineTo(px - tx * s * 0.05f + nx * s * 0.16f, py - ty * s * 0.05f + ny * s * 0.16f)
+        lineTo(px - tx * s * 0.05f - nx * s * 0.16f, py - ty * s * 0.05f - ny * s * 0.16f)
+        close()
+    }
+    drawPath(head, color)
+}
+
+// 盖、提手、上宽下窄的桶身加两道竖纹：轮廓是开口的，跟输入线、发丝线一样只描边。
+private fun DrawScope.deleteGlyph(color: Color) {
+    val s = size.width
+    val w = s * 0.08f
+    drawLine(color, Offset(s * 0.15f, s * 0.24f), Offset(s * 0.85f, s * 0.24f), w)
+    val handle = Path().apply {
+        moveTo(s * 0.37f, s * 0.24f)
+        lineTo(s * 0.37f, s * 0.13f)
+        lineTo(s * 0.63f, s * 0.13f)
+        lineTo(s * 0.63f, s * 0.24f)
+    }
+    drawPath(handle, color, style = Stroke(width = w))
+    val body = Path().apply {
+        moveTo(s * 0.26f, s * 0.32f)
+        lineTo(s * 0.31f, s * 0.87f)
+        lineTo(s * 0.69f, s * 0.87f)
+        lineTo(s * 0.74f, s * 0.32f)
+    }
+    drawPath(body, color, style = Stroke(width = w))
+    drawLine(color, Offset(s * 0.42f, s * 0.44f), Offset(s * 0.44f, s * 0.76f), w * 0.8f)
+    drawLine(color, Offset(s * 0.58f, s * 0.44f), Offset(s * 0.56f, s * 0.76f), w * 0.8f)
 }
 
 // 页签用"墨线 + 朱色底线"表达当前位置，不用 Material 的药丸按钮。

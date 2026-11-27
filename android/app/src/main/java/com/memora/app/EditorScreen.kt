@@ -147,33 +147,35 @@ fun EditorScreen(
                 modifier = Modifier.weight(1f),
             )
             if (note != null) {
-                TextAction(
-                    if (askDelete) "确认删除" else "删除",
+                IconAction(
+                    DeskIcon.Delete,
+                    if (askDelete) "确认删" else "删",
+                    armed = askDelete,
                     enabled = !busy,
-                    color = if (askDelete) Vermilion else InkSoft,
+                    color = InkSoft,
                     onClick = {
                         if (!askDelete) {
                             askDelete = true
-                            return@TextAction
-                        }
-                        busy = true
-                        scope.launch {
-                            try {
-                                api.deleteNote(note.id)
-                                local.clearDraft()
-                                onDone()
-                            } catch (e: ApiError) {
-                                // 已删除再删回 404。按设计当"已经不在了"处理，不报错。
-                                when (e.kind) {
-                                    ApiError.Kind.Unauthorized -> onUnauthorized()
-                                    ApiError.Kind.NotFound -> {
-                                        local.clearDraft()
-                                        onDone()
-                                    }
+                        } else {
+                            busy = true
+                            scope.launch {
+                                try {
+                                    api.deleteNote(note.id)
+                                    local.clearDraft()
+                                    onDone()
+                                } catch (e: ApiError) {
+                                    // 已删除再删回 404。按设计当"已经不在了"处理，不报错。
+                                    when (e.kind) {
+                                        ApiError.Kind.Unauthorized -> onUnauthorized()
+                                        ApiError.Kind.NotFound -> {
+                                            local.clearDraft()
+                                            onDone()
+                                        }
 
-                                    else -> {
-                                        notice = describe(e)
-                                        busy = false
+                                        else -> {
+                                            notice = describe(e)
+                                            busy = false
+                                        }
                                     }
                                 }
                             }

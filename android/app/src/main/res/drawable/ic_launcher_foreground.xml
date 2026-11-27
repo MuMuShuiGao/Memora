@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 启动图标前景：纸色的 M 走四笔，最后一笔落在朱印上。
+         笔画方角收笔、印章转 -3°，都跟界面里的输入线与状态印章同一个来源
+         （docs/decisions/0018-launcher-icon-ink-mark.md）。
+         内容收在以 (54,54) 为心、半径约 34 的圆里：自适应图标最狠的圆形遮罩
+         保证可见的是 66dp 直径，超出这一圈的就是各厂商自己裁的地方。 -->
+    <path
+        android:pathData="M32,68 L32,36 L50,55 L68,36 L68,57"
+        android:strokeColor="#F3F3ED"
+        android:strokeWidth="7.5"
+        android:strokeLineCap="square"
+        android:strokeLineJoin="miter" />
+
+    <group
+        android:name="seal"
+        android:pivotX="68"
+        android:pivotY="64"
+        android:rotation="-3">
+        <path
+            android:fillColor="#B23A2D"
+            android:pathData="M61,57 L75,57 L75,71 L61,71 Z" />
+    </group>
+</vector>

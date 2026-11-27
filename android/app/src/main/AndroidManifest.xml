@@ -8,6 +8,7 @@
     <application
         android:label="@string/app_name"
         android:allowBackup="false"
+        android:icon="@mipmap/ic_launcher"
         android:supportsRtl="true"
         android:usesCleartextTraffic="false"
         android:networkSecurityConfig="@xml/network_security_config"
@@ -15,8 +16,8 @@
 
         <!-- allowBackup=false：备份会把 Keystore 密文和地址一起带走，而这套访问控制
              只有口令这一道防线，不给"拷走 app 数据"留这条路。
-             不写 android:icon：当前用系统默认图标，图标与应用名由需求方定
-             （见 docs/design/android-client.md 未决问题）。 -->
+             图标是一张自适应图标（minSdk 26 起全都支持，所以没有 mipmap 各密度位图兜底）：
+             墨底 + 纸色 M + 朱印，见 docs/decisions/0018-launcher-icon-ink-mark.md。 -->
         <activity
             android:name=".MainActivity"
             android:exported="true"

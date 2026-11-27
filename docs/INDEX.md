@@ -34,6 +34,9 @@
 | [decisions/0014-todo-tasks-with-priority.md](decisions/0014-todo-tasks-with-priority.md) | 生效中 | 待办独立成表，完成时刻决定它进哪一期报表 |
 | [decisions/0015-self-hosted-apk-release-channel.md](decisions/0015-self-hosted-apk-release-channel.md) | 生效中 | APK 更新走同一台服务器的同一端口与同一口令，服务端只读暴露版本元数据与安装包，客户端比版本号后提示并下载、由系统安装页收尾；所有变体统一用一把仓库外 keystore 签名 |
 | [decisions/0016-repo-owned-line-endings.md](decisions/0016-repo-owned-line-endings.md) | 生效中 | 行尾由仓库根那份 `.gitattributes` 定死（文本 LF、`*.bat` 留 CRLF、二进制不转），各人机器上的 `core.autocrlf` 不再决定 `git status` 报什么 |
+| [decisions/0017-drawn-line-icons.md](decisions/0017-drawn-line-icons.md) | 生效中 | 加/刷新/删三个短动词改用 `Components.kt` 里自绘的线条字形，装在 40dp 方框里；删除第二次确认靠盖一枚朱色方框，不用 material-icons |
+| [decisions/0018-launcher-icon-ink-mark.md](decisions/0018-launcher-icon-ink-mark.md) | 生效中 | 启动图标是一张自适应图标——墨底 `#1B1C18` 上画纸色描边 M，最后一笔收进一枚转了 -3° 的朱色方印；只有 anydpi-v26 那份矢量加单色层，不铺各密度位图 |
+| [decisions/0019-refresh-only-on-reports.md](decisions/0019-refresh-only-on-reports.md) | 生效中 | 三屏各一枚刷新图标收成一枚——只留报表页；记录与待办页靠"进屏即重拉、写失败自动回滚重拉"，跨设备的新内容切走页签再回来才看得见 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
 | [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 三张表的字段与归属算法、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
 | [design/android-client.md](design/android-client.md) | 生效中 | 手机端界面划分、本地只存哪五样、十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |

@@ -42,12 +42,11 @@ fun NotesScreen(
     // 只有一页拉满了才暗示后面还有：让"更早的"在到底时还亮着，点下去什么也不发生，
     // 用户会以为是网络问题。
     var canPage by remember { mutableStateOf(false) }
-    var reload by remember { mutableStateOf(0) }
 
     // 不缓存业务数据（ADR-0001）：从编辑页回来这一屏重进组合，effect 自然再拉一次。
     // 过滤交给服务端，客户端不本地筛——两边结果不一致时，"手机上看不到服务器上有的那条"
     // 是最难解释的差异。
-    LaunchedEffect(search, reload) {
+    LaunchedEffect(search) {
         if (search.isNotEmpty()) delay(300)
         loading = true
         notice = null
@@ -63,22 +62,13 @@ fun NotesScreen(
     }
 
     Column(Modifier.fillMaxSize()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 10.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
-            UnderlineField(
-                value = search,
-                onValueChange = { search = it },
-                placeholder = "搜关键词",
-                modifier = Modifier.weight(1f),
-                textStyle = MaterialTheme.typography.bodyMedium,
-            )
-            Spacer(Modifier.width(4.dp))
-            // 另一台设备刚记的那条，这台不会自己知道（没有推送）。用按钮而不是下拉刷新：
-            // 后者在 material3 里还是实验 API，而 FR-01 只要求"能看到同一条"。
-            TextAction("刷新", onClick = { reload++ }, enabled = !loading)
-        }
+        UnderlineField(
+            value = search,
+            onValueChange = { search = it },
+            placeholder = "搜关键词",
+            modifier = Modifier.fillMaxWidth().padding(start = 20.dp, end = 20.dp, top = 10.dp),
+            textStyle = MaterialTheme.typography.bodyMedium,
+        )
 
         notice?.let {
             Notice(it, Modifier.padding(horizontal = 20.dp, vertical = 12.dp))

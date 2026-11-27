@@ -1,4 +1,6 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <color name="paper">#F3F3ED</color>
+    <!-- 启动图标的墨色底：跟界面里的 Ink 同一个值，只是资源层拿不到 Kotlin 常量。 -->
+    <color name="ic_launcher_background">#1B1C18</color>
 </resources>

@@ -148,7 +148,7 @@ fun ReportsScreen(api: MemoApi, local: LocalStore, onUnauthorized: () -> Unit) {
             }
             Spacer(Modifier.weight(1f))
             // 定时归档是服务端在跑的（ADR-0004），手机上没有推送——想看刚生成的那份只能重拉。
-            TextAction("刷新", onClick = { reload++ }, enabled = !loading)
+            IconAction(DeskIcon.Refresh, "刷新", onClick = { reload++ }, enabled = !loading)
         }
 
         notice?.let {

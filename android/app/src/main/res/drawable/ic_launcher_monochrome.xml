@@ -1,0 +1,26 @@
+<?xml version="1.0" encoding="utf-8"?>
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+
+    <!-- 单色层：Android 13+ 开"主题图标"时系统只取这一层再按壁纸染色。
+         不写它，系统会拿前景自己抠，朱印那块会被连色带形状一起丢掉。
+         几何跟 ic_launcher_foreground 一致，只是全部收成同一色。 -->
+    <path
+        android:pathData="M32,68 L32,36 L50,55 L68,36 L68,57"
+        android:strokeColor="#FFFFFF"
+        android:strokeWidth="7.5"
+        android:strokeLineCap="square"
+        android:strokeLineJoin="miter" />
+
+    <group
+        android:pivotX="68"
+        android:pivotY="64"
+        android:rotation="-3">
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M61,57 L75,57 L75,71 L61,71 Z" />
+    </group>
+</vector>

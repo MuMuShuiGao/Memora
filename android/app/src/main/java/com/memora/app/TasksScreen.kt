@@ -168,6 +168,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         Row(
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(2.dp),
         ) {
             UnderlineField(
                 value = draft,
@@ -178,9 +179,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                 onSubmit = { addTask() },
                 textStyle = MaterialTheme.typography.bodyMedium,
             )
-            Spacer(Modifier.width(4.dp))
-            TextAction("加", enabled = !busy && draft.isNotBlank(), onClick = { addTask() })
-            TextAction("刷新", enabled = !busy && !loading, onClick = { reload++ })
+            IconAction(DeskIcon.Add, "加一条", enabled = !busy && draft.isNotBlank(), onClick = { addTask() })
         }
         Text(
             "未完成 ${open.size} · 已完成 ${done.size}",
@@ -389,16 +388,18 @@ private fun TaskRow(
                     )
                 }
             }
-            TextAction(
+            IconAction(
+                DeskIcon.Delete,
                 if (armed) "确认删" else "删",
+                armed = armed,
+                enabled = enabled,
+                color = InkSoft,
                 onClick = {
                     if (!armed) onArm() else {
                         onClear()
                         onDelete()
                     }
                 },
-                enabled = enabled,
-                color = if (armed) Vermilion else InkSoft,
             )
             if (draggable) {
                 DragHandle(
