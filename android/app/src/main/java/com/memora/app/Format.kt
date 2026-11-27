@@ -4,6 +4,7 @@ import java.time.Instant
 import java.time.LocalDate
 import java.time.OffsetDateTime
 import java.time.ZoneId
+import java.time.YearMonth
 import java.time.ZoneOffset
 import java.time.ZonedDateTime
 import java.time.format.DateTimeFormatter
@@ -74,3 +75,23 @@ fun dayToUtcMillis(day: String): Long? =
 
 fun millisToDay(millis: Long): String =
     Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().toString()
+
+// 读完月份是字面年月（ADR-0029）：按手机当前年月给，不换算时区，也不由服务端缺省。
+fun nowMonth(): String = YearMonth.now().toString()
+
+fun parseMonth(month: String): YearMonth? =
+    try {
+        YearMonth.parse(month)
+    } catch (e: Exception) {
+        null
+    }
+
+fun monthTitle(month: String): String {
+    val ym = parseMonth(month) ?: return month
+    return "${ym.year}年${ym.monthValue}月"
+}
+
+fun monthShort(month: String): String {
+    val ym = parseMonth(month) ?: return month
+    return "${ym.monthValue}月"
+}

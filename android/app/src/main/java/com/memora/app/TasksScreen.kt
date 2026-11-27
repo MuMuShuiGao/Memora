@@ -40,10 +40,8 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
-import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -1009,27 +1007,6 @@ private fun List<Task>.relocate(task: Task): List<Task> {
     val newOpen = if (task.done) open else open + task
     val newDone = if (task.done) listOf(task) + finished else finished
     return newOpen + newDone
-}
-
-// 心得是给翻回去看的人留的：衬线小字，左侧一道朱线，点它再改（ADR-0027）。
-@Composable
-private fun TakeawayNote(text: String, enabled: Boolean, onClick: () -> Unit) {
-    Text(
-        text,
-        style = MaterialTheme.typography.bodyMedium,
-        color = InkSoft,
-        modifier = Modifier
-            .fillMaxWidth()
-            .padding(top = 4.dp)
-            .clickable(enabled = enabled, onClickLabel = "改这句心得", onClick = onClick)
-            .drawBehind {
-                drawRect(
-                    color = Vermilion,
-                    size = Size(2.dp.toPx(), size.height),
-                )
-            }
-            .padding(start = 10.dp, top = 2.dp, bottom = 2.dp),
-    )
 }
 
 // 按码点截住输入，和服务端数的是同一件事（ADR-0027）；多粘贴出来的部分不进草稿。

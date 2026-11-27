@@ -58,6 +58,20 @@ data class Report(
 @Serializable
 data class ReportList(val reports: List<Report> = emptyList(), val count: Int = 0)
 
+// 读过的书（ADR-0029）：finishedMonth 是字面年月 YYYY-MM，不跟时间戳换算时区。
+// 作者与心得都可空：空串就是没填，心得清空也不删这本书。
+@Serializable
+data class Book(
+    val id: Long,
+    val title: String,
+    val author: String = "",
+    @SerialName("finished_month") val finishedMonth: String = "",
+    val takeaway: String = "",
+)
+
+@Serializable
+data class BookList(val books: List<Book> = emptyList(), val count: Int = 0)
+
 // 更新通道（ADR-0015）：versionCode 是唯一的判据，服务端没有已发布版本时这个类根本不出现。
 // size 由服务端 stat 出来，不是发布时手填的，所以"约多少 MB"不会和真实文件对不上。
 @Serializable

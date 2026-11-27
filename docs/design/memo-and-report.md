@@ -1,9 +1,9 @@
 # 设计：记录、待办与报表的数据、接口与传输
 
 > 状态：生效中
-> 摘要：三张表的字段与归属算法、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)、[0025](../decisions/0025-backup-snapshot-and-offsite-pull.md)、[0026](../decisions/0026-manual-offsite-pull.md)、[0027](../decisions/0027-completion-takeaway.md)。
-> 更新：2026-11-27（新增 §8 备份与恢复按 ADR-0025、盘外副本改手动按 ADR-0026；§9 本设计不包含顺延；按 ADR-0021 给 `tasks` 加 `due_on` 安排日期，日历与待办页共用这一份；同日早些时候澄清改待办正文只动 `body`（ADR-0020）；待办加可跳过的完成心得 `takeaway` 并进报表素材（ADR-0027））
+> 摘要：四张表的字段与归属口径（读书不进报表）、十九个接口的请求响应形状（业务十七 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)、[0025](../decisions/0025-backup-snapshot-and-offsite-pull.md)、[0026](../decisions/0026-manual-offsite-pull.md)、[0027](../decisions/0027-completion-takeaway.md)、[0029](../decisions/0029-reading-list.md)。
+> 更新：2026-11-28（新增 §1 `books` 表与 §5 四个读书接口，读书不进周报月报素材，按 ADR-0029；此前 2026-11-27 新增 §8 备份与恢复按 ADR-0025、盘外副本改手动按 ADR-0026，按 ADR-0021 给 `tasks` 加 `due_on`，按 ADR-0027 给待办加完成心得 `takeaway`）
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -53,6 +53,23 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 已完成的行保留它勾掉那一刻的 rank 但不再维护，已完成区按 `done_at` 倒序显示。`done = 1` 的行不参与重编号，所以 rank 的连续性约束只覆盖未完成集。
 
 `due_on` 的取值规则：创建时显式给了日期就用它；没给就落服务端本地时区的「今天」。升级前已有的行在启动时按 `created_at` 的本地日期回填一次，回填只碰 `due_on` 为空的行、幂等。日历页拿到的是同一份 `GET /v1/tasks` 全量，按 `due_on` 分天——没有按月的查询接口，也没有第二张表。日期只有自然日，没有时分与提醒。
+
+### `books`
+
+读书是第三类业务对象（[ADR-0029](../decisions/0029-reading-list.md)）：记录带创建时间、待办带完成态与顺序，书只有读完年月和一句心得，三者互不转换，所以单独成表。
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY | 自增 |
+| `title` | TEXT NOT NULL | 书名，必填，≤100 码点 |
+| `author` | TEXT NOT NULL DEFAULT '' | 作者，可空，≤100 码点 |
+| `finished_month` | TEXT NOT NULL | 读完年月 `YYYY-MM`。只有月，没有日、时分与时区含义（需求方 2026-11-27 定） |
+| `takeaway` | TEXT NOT NULL DEFAULT '' | 读完心得，≤200 码点，空串表示没写；上限比待办心得的 50 字宽，书的心得是一段完整的想法（ADR-0029） |
+| `created_at` / `updated_at` | TEXT NOT NULL | 同 `notes` |
+
+索引：`idx_books_month (finished_month DESC)`。列表按 `finished_month` 倒序、同月按 `created_at` 倒序、再按 `id` 倒序，一次给全量（年几十本，不做搜索与分页），另加 1000 条安全上限。`finished_month` 的格式校验在 api 层：只认带零填充的 `YYYY-MM`，解析后再格式化回比一次。
+
+`books` **不参与报表归属**：读完一本书不是一份工作交付，书单不进周报月报素材（§6），`week_start` / `month_start` 那套冗余列在这里没有对应物。备份快照用 `VACUUM INTO` 导整库，`books` 自动包含在内，不增加运维动作。
 
 ### `reports`
 
@@ -117,6 +134,10 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `PATCH /v1/tasks/{id}` | 改 | 接受 `{body}` 与/或 `{done}` 与/或 `{due_on}` 与/或 `{takeaway}`；只改 `{body}` 时不重编 rank、不碰完成态与归属列（ADR-0020）；`due_on` 不能清空，只换到另一个自然日；`takeaway` 按码点计数、超过 50 回 400，空串等于清掉（ADR-0027）；`done` 从 true 改回 false 时清空 `done_at` 并把这条排到未完成队尾，但不动 `takeaway` |
 | `POST /v1/tasks/reorder` | 整列重排 | 请求 `{ids:[已完成拖拽的新顺序]}`，必须是**全部未完成 id 的一个排列**；服务端在一个事务里按数组下标重写 `rank=1..n`，返回重排后的列表。ids 有重复、有未知 id、漏了某条未完成 → 400 `bad_request`，不部分生效 |
 | `DELETE /v1/tasks/{id}` | 删除 | 幂等，已删除返回 404；删的是未完成项时后面的 rank 自动收紧 |
+| `GET /v1/books` | 书单全量 | 无分页：按 `finished_month` 倒序、同月新加的在前，一次返回 `{books, count}`；不做搜索，另加 1000 条安全上限（ADR-0029） |
+| `POST /v1/books` | 新建 | 请求 `{title, author?, finished_month?}`；书名必填 ≤100 码点，作者 ≤100 码点；`finished_month` 缺省为服务端本地时区的当月，给了必须是带零填充的 `YYYY-MM`。响应含 `id` 与两个时间戳 |
+| `PATCH /v1/books/{id}` | 改 | 接受 `{title}` / `{author}` / `{finished_month}` / `{takeaway}` 任意组合，只改发过来的字段；书名与年月不能清空，作者与心得传空串等于清掉；心得 ≤200 码点（ADR-0029）。字段全缺 → 400 |
+| `DELETE /v1/books/{id}` | 删除 | 幂等，已删除返回 404 |
 | `GET /v1/app/release` | 有没有新版可装 | 读 `<MEMORA_RELEASE_DIR>/release.json`，回 `{version_code, version_name, notes, size}`；`size` 由服务端 stat `app.apk` 得到，不是发布时手填的。没配目录或文件不在 → 404 `not_released`；清单在而包不在（发了一半）→ 500 `release_bad` |
 | `GET /v1/app/release/file` | 拉 APK 本体 | `application/vnd.android.package-archive`，走 `http.ServeContent`，因此带 `Accept-Ranges`；这条响应单独把 HTTP/2 单流写期限放宽到十分钟，避免慢网在一分钟被 `RST_STREAM` 掐断（[ADR-0022](../decisions/0022-download-write-deadline.md)）。文件缺失同样 404 `not_released`。服务端支持续传，客户端目前断了从头重下——10 MB 量级下那段偏移状态机不值（见 [android-client.md](android-client.md) §边界与异常） |
 
@@ -126,7 +147,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 `reorder` 走整列提交而不是单条改 rank，是为了让"拖一次"只对应一个请求：单条改动在中途网络失败时会留下一个"客户端显示新顺序、服务端是旧顺序"的分叉，而整列提交失败后客户端本地回滚、再拉一次就和服务端一致了。
 
-日历页也读这份全量列表、在客户端按 `due_on` 分天，因此切页签重拉一次就能看到另一页刚加的那条。按月的服务端过滤留到待办量真的超过 500 条安全上限时再做（ADR-0021 的复查条件）。
+日历页也读这份全量列表、在客户端按 `due_on` 分天，因此切区块重拉一次就能看到另一页刚加的那条。按月的服务端过滤留到待办量真的超过 500 条安全上限时再做（ADR-0021 的复查条件）。
 
 `body` 长度上限先按 2000 字符定（需求 §6 待定项之一，客户端和服务端同用一个常量配置）。超限返回 413 而不是静默截断。
 
@@ -144,6 +165,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 1.1 `source_count` 的口径由此变了：它是**喂给模型的素材条数**（记录数 + 本周期完成的待办数），不再是"该周期记录条数"。FR-08 的验收文案跟着改成"依据了多少条素材"。
 1.2 空周期的判据仍是"两路加起来为 0"：本周一条记录都没记、但勾掉了三条待办，照样要能出报（那三条正是这周做完的事）。
 1.3 `takeaway` 非空时跟在同一条待办后面，写成「（心得：…）」，提示词规则里说明它是完成后的补充；没有心得的待办只给标题，模型不得补一个结果（ADR-0027）。条数仍按待办算，心得不是独立素材。
+1.4 `books` 不进任何一路素材：哪怕某本书的 `finished_month` 落在这个周期，也不喂给模型。周报月报是工作口径，读一本书不等于一份交付（ADR-0029）。空周期判据也不考虑书。
 2. 调 DeepSeek 的对话补全接口（OpenAI 兼容），`model` 走配置。提示词要点：只用给到的内容、不编造未提到的交付物（需求 §5 第 4 条，含给没写心得的待办编一个结果）、按主题归并而非逐日流水、输出纯文本。**两类素材分段给出且标明语义**——勾掉的待办就是已交付，想法只是当时的念头；混成一段模型就分不开这两件事，"不许编造"那条也就没了核查抓手。
 3. 超时与重试：单次调用超时给到 60s（FR-04 的量级），失败重试 1 次；仍失败则 `status=failed` + `fail_reason`。
 4. 空周期（记录与已完成待办两路都为 0）不生成，直接返回 `code:"no_records"`——避免让模型憋出一份空话。

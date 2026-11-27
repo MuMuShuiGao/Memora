@@ -120,6 +120,17 @@ CREATE INDEX IF NOT EXISTS idx_tasks_done ON tasks(done, done_at DESC);
 CREATE INDEX IF NOT EXISTS idx_tasks_done_week  ON tasks(done_week_start);
 CREATE INDEX IF NOT EXISTS idx_tasks_done_month ON tasks(done_month_start);
 
+CREATE TABLE IF NOT EXISTS books (
+	id             INTEGER PRIMARY KEY,
+	title          TEXT    NOT NULL,
+	author         TEXT    NOT NULL DEFAULT '',
+	finished_month TEXT    NOT NULL,
+	takeaway       TEXT    NOT NULL DEFAULT '',
+	created_at     TEXT    NOT NULL,
+	updated_at     TEXT    NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_books_month ON books(finished_month DESC);
+
 CREATE TABLE IF NOT EXISTS reports (
 	id            INTEGER PRIMARY KEY,
 	kind          TEXT    NOT NULL CHECK (kind IN ('week','month')),

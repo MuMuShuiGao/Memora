@@ -38,6 +38,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.draw.rotate
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -57,6 +58,7 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import kotlin.math.PI
 import kotlin.math.cos
@@ -212,7 +214,7 @@ fun TextAction(
     }
 }
 
-enum class DeskIcon { Add, Refresh, Delete, Prev, Next, Check }
+enum class DeskIcon { Add, Refresh, Delete, Prev, Next, Check, Menu }
 
 // 按进这块区域的任何地方都先撤掉"等第二次确认"的删除。走 Initial 阶段只看不吃：
 // 输入框的光标、选区与点击照常；挂在外层，因为子控件会把 Main 阶段的点击吃掉。
@@ -262,6 +264,7 @@ fun IconAction(
                 DeskIcon.Prev -> chevronGlyph(tint, left = true)
                 DeskIcon.Next -> chevronGlyph(tint, left = false)
                 DeskIcon.Check -> checkGlyph(tint)
+                DeskIcon.Menu -> menuGlyph(tint)
             }
         }
     }
@@ -324,6 +327,15 @@ private fun DrawScope.chevronGlyph(color: Color, left: Boolean) {
     drawLine(color, Offset(s * far, s * 0.5f), Offset(s * near, s * 0.8f), w, cap = StrokeCap.Round)
 }
 
+// 目录图标：三条等长横线。线距与拖拽把手同一笔势，只是收在 20dp 字形里。
+private fun DrawScope.menuGlyph(color: Color) {
+    val s = size.width
+    val w = s * 0.09f
+    listOf(0.22f, 0.5f, 0.78f).forEach { y ->
+        drawLine(color, Offset(s * 0.14f, s * y), Offset(s * 0.86f, s * y), w)
+    }
+}
+
 // 盖、提手、上宽下窄的桶身加两道竖纹：轮廓是开口的，跟输入线、发丝线一样只描边。
 private fun DrawScope.deleteGlyph(color: Color) {
     val s = size.width
@@ -347,7 +359,37 @@ private fun DrawScope.deleteGlyph(color: Color) {
     drawLine(color, Offset(s * 0.58f, s * 0.44f), Offset(s * 0.56f, s * 0.76f), w * 0.8f)
 }
 
+// 心得是给翻回去看的人留的：衬线小字，左侧一道朱线，点它再改（ADR-0027、ADR-0029）。
+// maxLines 只截显示，不截内容；打开编辑页能看到全文。
+@Composable
+fun TakeawayNote(
+    text: String,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    maxLines: Int = Int.MAX_VALUE,
+) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = InkSoft,
+        maxLines = maxLines,
+        overflow = TextOverflow.Ellipsis,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .clickable(enabled = enabled, onClickLabel = "改这句心得", onClick = onClick)
+            .drawBehind {
+                drawRect(
+                    color = Vermilion,
+                    size = Size(2.dp.toPx(), size.height),
+                )
+            }
+            .padding(start = 10.dp, top = 2.dp, bottom = 2.dp),
+    )
+}
+
 // 页签用"墨线 + 朱色底线"表达当前位置，不用 Material 的药丸按钮。
+// 主导航已收进抽屉（ADR-0028），这个只服务报表屏里的周/月切换。
 @Composable
 fun UnderlineTab(text: String, active: Boolean, onClick: () -> Unit) {
     // IntrinsicSize.Max 让底面朱线只跟文字同宽；不加的话 fillMaxWidth 会把整个页签撑满。

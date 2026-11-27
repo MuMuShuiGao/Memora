@@ -87,6 +87,30 @@ class MemoApi(private val baseUrl: String) {
         raw("DELETE", "/v1/tasks/$id", null)
     }
 
+    // 读书（ADR-0029）：读完只记到年月，作者可空。月份由调用方按手机当前年月显式给，
+    // 不依赖服务端缺省——和待办的 due_on 同一条理由。
+    suspend fun listBooks(): BookList = get("/v1/books")
+
+    suspend fun createBook(title: String, finishedMonth: String): Book =
+        sendBody("POST", "/v1/books", BookCreateRequest(title, finishedMonth))
+
+    // 没改的字段不放进来；作者与心得传空串是"清掉"，不是"没改"。
+    suspend fun updateBook(
+        id: Long,
+        title: String? = null,
+        author: String? = null,
+        finishedMonth: String? = null,
+        takeaway: String? = null,
+    ): Book = sendBody(
+        "PATCH",
+        "/v1/books/$id",
+        BookUpdateRequest(title, author, finishedMonth, takeaway),
+    )
+
+    suspend fun deleteBook(id: Long) {
+        raw("DELETE", "/v1/books/$id", null)
+    }
+
     // 更新通道（ADR-0015）：没有可更新的版本时服务端回 404，这不算错误。
     // 检查更新的调用方不该因为"还没发过版"被打扰，所以这里把 404 摘成 null，其余照抛。
     suspend fun releaseInfo(): ReleaseInfo? =
@@ -252,6 +276,20 @@ class MemoApi(private val baseUrl: String) {
     )
 
     @Serializable
+    private data class BookCreateRequest(
+        val title: String,
+        @SerialName("finished_month") val finishedMonth: String,
+    )
+
+    @Serializable
+    private data class BookUpdateRequest(
+        val title: String? = null,
+        val author: String? = null,
+        @SerialName("finished_month") val finishedMonth: String? = null,
+        val takeaway: String? = null,
+    )
+
+    @Serializable
     private data class DoneRequest(val done: Boolean)
 
     @Serializable
@@ -264,6 +302,11 @@ class MemoApi(private val baseUrl: String) {
 
         // 完成心得的字数上限，按码点计（ADR-0027）。服务端同样拦一道，超限回 400。
         const val MAX_TAKEAWAY_CHARS = 50
+
+        // 读书的书名、作者与心得上限（ADR-0029）。心得比完成心得长，书读完值得多写两句。
+        const val MAX_BOOK_TITLE_CHARS = 100
+        const val MAX_BOOK_AUTHOR_CHARS = 100
+        const val MAX_BOOK_TAKEAWAY_CHARS = 200
 
         // 一次拉这么多。服务端的上限就是 200（internal/api/notes.go 的 maxListLimit），
         // 取满它能让"更早的"在绝大多数情况下一次到底。

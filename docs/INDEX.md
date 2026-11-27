@@ -45,9 +45,11 @@
 | [decisions/0025-backup-snapshot-and-offsite-pull.md](decisions/0025-backup-snapshot-and-offsite-pull.md) | 已废弃（被 0026 取代） | serve 每天导出一份 SQLite 快照并保留 5 份，Windows 计划任务每周 scp 拉到本机 |
 | [decisions/0026-manual-offsite-pull.md](decisions/0026-manual-offsite-pull.md) | 生效中 | 服务器每日快照不变，盘外副本由人双击本机脚本拉取，不再注册计划任务 |
 | [decisions/0027-completion-takeaway.md](decisions/0027-completion-takeaway.md) | 生效中 | 已完成待办可留一句 ≤50 字心得，屏底可跳过提示，不强制；心得进报表素材 |
+| [decisions/0028-left-drawer-navigation.md](decisions/0028-left-drawer-navigation.md) | 生效中 | 五个区块收进左侧抽屉，打开仍直接落待办；撤掉顶部页签行，不引导航库；代价是切区块多一次点击 |
+| [decisions/0029-reading-list.md](decisions/0029-reading-list.md) | 生效中 | `books` 独立成表，字段是书名/作者/读完年月/心得；按年分组翻看，不进周报月报；否掉并入记录、精确到日、只记年份与评分在读 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
-| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 三张表的字段与归属算法（待办含安排日期）、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
-| [design/android-client.md](design/android-client.md) | 生效中 | 手机端七屏划分（含日历）、本地只存哪五样、十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
+| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 四张表的字段与归属算法（待办含安排日期，读书不进报表）、十九个接口的请求响应形状（业务十七 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
+| [design/android-client.md](design/android-client.md) | 生效中 | 手机端九屏划分（抽屉五区块，含日历与读书）、本地只存哪五样、十九个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
 | [refactor/README.md](refactor/README.md) | 生效中 | 重构专项的收录边界与开工前置条件 |
 | `templates/` | — | 6 份模板：adr / prd / design / refactor / milestone / incident。目录本身无状态，模板自带的 `草案` 是占位提醒 |
 
