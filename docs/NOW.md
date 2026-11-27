@@ -12,7 +12,7 @@
 - **安卓在需求方 Windows 上编译与实跑都通**（`assembleLocalDebug` 全绿）：`android/` 下 18 个 Kotlin 文件 + 两 flavor，视觉「编辑部案头」（ADR-0013），行内图标 ADR-0017，启动图标 ADR-0018，刷新只留报表页 ADR-0019，正文行内改字与删除确认点别处即撤 ADR-0020。本轮页签改成「待办 / 日历 / 记录 / 报表」，新增 [CalendarScreen](../android/app/src/main/java/com/memora/app/CalendarScreen.kt)：周一起始固定六行、一格最多三枚记号（多出的折成两条短横 + 「+N」）、月内周一挂周号、相邻月可点、默认选中今天且翻月落到 1 号。模拟器逐项点过：日历加一条 → 待办页立刻出现；待办页加一条显式带手机本地今天；12 月 3 日那条在待办页显示「安排 · 12月3日 周四」；勾选同步沉底、`done_week_start` 与周归属不变；翻月、今天、相邻月、四任务格的「+2」；测试数据已从本机库删净。
 - **云机服务端已重建到 `c51a2fa`**（systemd active）：启动日志 `历史待办已补上安排日期 count=6`，真实库迁移与回填都成功。公网 `/healthz` 200，`/v1/app/release`、`/v1/app/release/file` 未带口令均 401（实测，从需求方 Windows 发起）。
 - **v0.5 已发（2026-11-27 12:18）**：`serverRelease` 已编（7,593,972 字节，versionCode 5 / 0.5，`aapt2` 核对），`scripts/release.sh` 上传成功；云上 `app.apk` 与本地 sha256 前 16 位一致（`9a8f2b4431399ca5`），`release.json` 的 notes 写明日历页。
-- **真机第一次下载 v0.5 失败已修**：更新页显示 `stream was reset: INTERNAL_ERROR`，云机日志两次下载都整 60 秒结束（`took=1m0.976s` / `1m0.236s`）——HTTP/2 把全局 `WriteTimeout` 当成单流写期限，慢网拉 7.6 MB 没拉完就被 `RST_STREAM`。按 [ADR-0022](decisions/0022-download-write-deadline.md) 把下载这条响应单独放宽到十分钟（日志包装补了 `Unwrap`，否则 `ResponseController` 静默失效），云机已重建；手机重试下载即可，APK 本身没改、无需重新发版。
+- **真机第一次下载 v0.5 失败已修**：更新页显示 `stream was reset: INTERNAL_ERROR`，云机日志两次下载都整 60 秒结束（`took=1m0.976s` / `1m0.236s`）——HTTP/2 把全局 `WriteTimeout` 当成单流写期限，慢网拉 7.6 MB 没拉完就被 `RST_STREAM`。按 [ADR-0022](decisions/0022-download-write-deadline.md) 把下载这条响应单独放宽到十分钟（日志包装补了 `Unwrap`，否则 `ResponseController` 静默失效），云机已重建；本机再用真实二进制跑过 12 MB / 80 秒的慢速 HTTP/2 下载，`took=1m20.132s` 整包拉完（实测）。手机重试下载即可，APK 本身没改、无需重新发版。
 - **远端是需求方的公开 GitHub 仓库**，凭据是仓库专用 deploy key（私钥只在 `~/.ssh`，600）。`main` 已推到 `87f3237`，没强推、没改写历史。要查地址跑 `git remote -v`。
 
 ## 卡在哪
