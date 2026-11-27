@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
@@ -153,18 +154,12 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.weight(1f)) {
-                Text(
-                    "${month.year}年${month.monthValue}月",
-                    style = MaterialTheme.typography.titleLarge,
-                    color = Ink,
-                )
-                Text(
-                    "周一开始 · 点日期看当天安排",
-                    style = MaterialTheme.typography.labelSmall,
-                    color = InkSoft,
-                )
-            }
+            Text(
+                "${month.year}年${month.monthValue}月",
+                style = MaterialTheme.typography.titleLarge,
+                color = Ink,
+                modifier = Modifier.weight(1f),
+            )
             if (month != YearMonth.from(todayDate)) {
                 TextAction("今天", onClick = { pick(todayDate) })
                 Spacer(Modifier.width(4.dp))
@@ -287,7 +282,7 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     }
 }
 
-// 一格最多三枚记号：装不下就两条短横加一个 +N，N 是还藏着几条，格高是死的。
+// 格高是死的：日期下面只放一枚计数徽标，当天几条就是几，不再画短横。
 @Composable
 private fun DayCell(
     date: LocalDate,
@@ -307,17 +302,22 @@ private fun DayCell(
         isToday -> Vermilion
         else -> Ink
     }
-    val openBar = when {
+    // 徽标就是一枚小朱印：选中日反白，全部勾掉的日子退成灰底，相邻月再淡一档。
+    val allDone = tasks.isNotEmpty() && tasks.all { it.done }
+    val badgeBg = when {
         isSelected -> Paper
-        !inMonth -> InkSoft.copy(alpha = 0.25f)
-        else -> Ink
-    }
-    val doneBar = when {
-        isSelected -> Paper.copy(alpha = 0.45f)
         !inMonth -> RuleLine.copy(alpha = 0.55f)
-        else -> RuleLine
+        allDone -> RuleLine
+        else -> Vermilion
+    }
+    val badgeInk = when {
+        isSelected -> Vermilion
+        !inMonth -> InkSoft.copy(alpha = 0.6f)
+        allDone -> InkSoft
+        else -> Paper
     }
     val weekStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, lineHeight = 8.sp)
+    val badgeStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 11.sp)
     val subColor = if (isSelected) Paper.copy(alpha = 0.85f) else InkSoft
 
     Box(
@@ -342,19 +342,16 @@ private fun DayCell(
             if (date.dayOfWeek == DayOfWeek.MONDAY && inMonth) {
                 Text("第${isoWeek(date)}周", style = weekStyle, color = subColor)
             }
-            Spacer(Modifier.height(2.dp))
-            val shown = if (tasks.size > 3) 2 else tasks.size
-            repeat(shown) { i ->
+            if (tasks.isNotEmpty()) {
+                Spacer(Modifier.height(2.dp))
                 Box(
                     Modifier
-                        .fillMaxWidth()
-                        .padding(vertical = 1.dp)
-                        .height(2.dp)
-                        .background(if (tasks[i].done) doneBar else openBar),
-                )
-            }
-            if (tasks.size > 3) {
-                Text("+${tasks.size - 2}", style = weekStyle, color = subColor)
+                        .background(badgeBg, RoundedCornerShape(2.dp))
+                        .padding(horizontal = 4.dp, vertical = 1.dp),
+                    contentAlignment = Alignment.Center,
+                ) {
+                    Text("${tasks.size}", style = badgeStyle, color = badgeInk)
+                }
             }
         }
     }

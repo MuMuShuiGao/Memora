@@ -3,7 +3,7 @@
 > 状态：生效中
 > 摘要：手机端界面划分、本地只存哪五样、十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换
 > 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0005](../decisions/0005-no-redaction-in-app.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0010](../decisions/0010-minimal-android-deps.md)、[0013](../decisions/0013-editorial-desk-visual.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0017](../decisions/0017-drawn-line-icons.md)、[0018](../decisions/0018-launcher-icon-ink-mark.md)、[0019](../decisions/0019-refresh-only-on-reports.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)；接口契约见 [memo-and-report.md](memo-and-report.md)
-> 更新：2026-11-27（新增日历页按 ADR-0021；行内短动词改图标按 ADR-0017；启动图标按 ADR-0018；刷新只留报表页按 ADR-0019；待办正文行内编辑按 ADR-0020）
+> 更新：2026-11-27（新增日历页按 ADR-0021；行内短动词改图标按 ADR-0017；启动图标按 ADR-0018；刷新只留报表页按 ADR-0019；待办正文行内编辑按 ADR-0020；日历格改计数徽标并去掉说明行）
 
 ## 目标与非目标
 
@@ -81,7 +81,7 @@ ADR-0008 说界面三块（列表、录入、报表）。这里有七屏：口�
 ### 日历屏的六条定论
 
 1. **日历不是第二份数据，是同一批待办按 `due_on` 分天**（ADR-0021）。它和待办页都读 `GET /v1/tasks` 全量、都在进屏时重拉，所以日历里写的一句切回待办页就在，反过来也一样；客户端不做跨页缓存或自己合并。
-2. **格子里最多三枚短横**：未勾墨色、勾掉发丝线色；超过三枚写一个 `+N`。日数字用等宽数字，周一格下再带一个 `第N周` 小字（ISO 周），其余格不重复——每格都印周数会把 7×6 的网格变成表格。
+2. **格子里只有一枚计数徽标**：当天几条就写几，不设上限、不再画短横——朱底纸字，全部勾掉的日子退成灰底；选中日反白成纸底朱字，相邻月再淡一档。日数字用等宽数字，周一格下再带一个 `第N周` 小字（ISO 周），其余格不重复——每格都印周数会把 7×6 的网格变成表格。
 3. **月网格固定六行、周一起始**，相邻月的格子灰显但可点：点它就切到那个月并选它。不做横向滑动手势，那和未来可能加的滚动/拖拽抢方向；上/下月靠两枚自绘箭头，"今天"是一枚文字动作，只在不是本月时出现。
 4. **选中日只有一个**：默认今天；切月时选中落到那个月的 1 日；"今天"同时回到本月并选今天。选中日填朱色方块，今天未选中时用朱色数字加 1dp 朱框——两种状态不靠颜色深浅区分。
 5. **日历里只做两件事：加、勾**。加走屏底单行录入（预填选中日），勾走与待办页相同的 `PATCH {done}`；改字、拖序、删除仍回待办页，避免把拖拽手势和两次点击的删除确认在月网格里再实现一遍。勾掉的条目留在它那一天，带删除线。
