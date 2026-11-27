@@ -115,6 +115,58 @@ Build Variants 选 `localDebug` → Make Project。
 
 改过证书就要重装 APK：网络安全配置里的证书是编译期打进包的。
 
+## 命令行编译与模拟器自测
+
+不回 AS 点按钮时，每轮都照这条链走，顺序固定：先过编译，再上模拟器真点。
+
+**1. 服务端**（仓库根；服务端没动也跑一遍，成本就两条命令）：
+
+```bash
+go vet ./...
+go test ./...
+```
+
+**2. 安卓编译**（`android/` 下；JVM 见上一节，命令行靠 `~/.gradle/gradle.properties`）：
+
+```bash
+./gradlew :app:compileLocalDebugKotlin   # 先跑这条，比 assemble 快，编译错到这就停
+./gradlew :app:assembleLocalDebug        # 要装到模拟器才继续这条
+```
+
+cmd 里把 `./gradlew` 换成 `gradlew.bat`。
+
+**3. 起本机服务端**：`memora.exe serve -config <env>`，六项 env 见上一节。
+`devlocal/` 里 env 注释写的口令**过不了 bcrypt（实测 401），别信注释**；要换口令就用
+`memora.exe hashpass` 重写。
+
+**4. 本地回路的证书要先换、后还原**：仓库里那张 `local` 证书与 `tls-test/` 的私钥不配对。
+每次重编前把 `tls-test/server.crt` 覆盖到 `app/src/local/res/raw/memora_server_cert.pem`，
+装完立刻 `git restore` 那一个文件。**这一步别提交**——还原后 `git status` 里不该再有它。
+
+**5. 装包、抓图、点按**：
+
+```bash
+ADB=<SDK>/platform-tools/adb.exe        # 本机没加进 PATH，用全路径
+$ADB install -r app/build/outputs/apk/local/debug/app-local-debug.apk
+$ADB exec-out screencap -p > /tmp/shot.png
+```
+
+- `adb devices` 看一眼目标设备再动手。
+- `-r` 不能省：口令密文绑定应用的 KeyStore，覆盖安装才保得住；卸载重装就要重输。
+- 截图等界面画完再抓（启动后约两秒），刚拉起来那一张常是黑的。
+- **点位别目测截图**：预览会缩放（1080x2400 的屏常显示成 900x2000 宽），按看到的分辨率算必偏。
+  从 UI 树取真实 bounds：
+
+  ```bash
+  MSYS_NO_PATHCONV=1 $ADB shell uiautomator dump /sdcard/ui.xml
+  $ADB pull /sdcard/ui.xml
+  ```
+
+- `MSYS_NO_PATHCONV=1` 别省：Git Bash 会把 `/sdcard/...` 改写成 `D:/.../sdcard/...`，
+  adb 当场报找不到文件。
+- 点按用 UI 树里 bounds 的中心：`$ADB shell input tap X Y`。
+- 验完把测试数据删掉，库和界面上都别留实验记录。
+
 ## 装到手机上
 
 模拟器也可以直接连云机，不必先在 Windows 起服务端：选 `serverDebug`，连接页填云机地址即可——

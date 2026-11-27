@@ -42,6 +42,14 @@ cp docs/templates/adr.md docs/decisions/000X-<短名>.md
   ADR: 0003
   ```
 - 一个提交对应一个能自证完整的改动；文档更新可以和代码同提交，但**不要**把文档更新留到"以后一起补"。
+
+**提交前验证（顺序固定，别凭印象）**：
+
+1. 仓库根：`go vet ./... && go test ./...`。
+2. 动过安卓：`cd android && ./gradlew :app:compileLocalDebugKotlin`；要上模拟器再 `assembleLocalDebug`。
+3. 动过界面：照 [android/README.md](../android/README.md) 的「命令行编译与模拟器自测」在模拟器上真点一遍。
+4. 提交正文最后一行照实写验证结果；没跑就写没跑。
+
 - 分支命名、评审要求：<按项目实际情况填。单人开发可直接提交主干；多人协作写清分支模型和评审要求>
 
 ## 5. 重构
