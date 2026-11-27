@@ -1,9 +1,11 @@
 package com.memora.app
 
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.gestures.detectVerticalDragGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -32,6 +34,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
@@ -64,8 +67,12 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     var notice by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
     var expanded by rememberSaveable { mutableStateOf(false) }
-    // 删走编辑页那套连点两次，记的是"已经点过一次"的那几条。
-    var armed by remember { mutableStateOf<Set<Long>>(emptySet()) }
+    // 删走编辑页那套连点两次，记的是"已经点过一次、正等确认"的那一条。
+    // 同时只认一条：点别处或点上另一只垃圾桶，旧的那次确认就作废。
+    var armedId by remember { mutableStateOf<Long?>(null) }
+    // 正改着的那一条与它的草稿。草稿不落盘：一句话的修改不值得再建一套草稿机制（ADR-0020）。
+    var editingId by remember { mutableStateOf<Long?>(null) }
+    var editDraft by remember { mutableStateOf("") }
 
     val drag = remember { DragState() }
 
@@ -104,6 +111,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     fun addTask() {
         val text = draft.trim()
         if (text.isEmpty() || busy) return
+        armedId = null
         runWrite {
             val created = api.createTask(text)
             // 新建插队首，其余顺延（ADR-0014 的连带决定）。位置就是顺序，rank 由服务端重编。
@@ -112,14 +120,66 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         }
     }
 
+    // 改正文不经过 busy：它不碰顺序，和勾选/拖拽撞不上（ADR-0020）。失败仍走统一的回滚重拉。
+    fun commitEdit() {
+        val id = editingId ?: return
+        val original = tasks.firstOrNull { it.id == id }
+        val text = editDraft.trim()
+        editingId = null
+        editDraft = ""
+        if (original == null || text.isEmpty() || text == original.body) return
+        tasks = tasks.map { if (it.id == id) it.copy(body = text) else it }
+        scope.launch {
+            notice = null
+            try {
+                // 只合正文：勾选那一路可能还有一次 PATCH 在飞，整条覆盖会把它的结果抹回去。
+                val got = api.updateTaskBody(id, text)
+                tasks = tasks.map { if (it.id == id) it.copy(body = got.body) else it }
+            } catch (e: ApiError) {
+                if (e.kind == ApiError.Kind.Unauthorized) {
+                    onUnauthorized()
+                } else {
+                    notice = describe(e)
+                    reload++
+                }
+            }
+        }
+    }
+
+    fun cancelEdit() {
+        editingId = null
+        editDraft = ""
+    }
+
+    fun startEdit(task: Task) {
+        if (busy || editingId == task.id) return
+        // 换一条改时先把上一条落定，否则那段字会随编辑态一起无声消失。
+        commitEdit()
+        // 手里拿着删除确认又点开正文，说明意图已经换了；不清掉的话下一次点垃圾桶就是真删。
+        armedId = null
+        editingId = task.id
+        editDraft = task.body
+    }
+
     fun toggle(task: Task) {
         if (busy) return
+        // 勾选也是"点了别处"：删除确认在等的是一个和勾选无关的第二次点击。
+        armedId = null
+        // 勾的是正改着的那条：先把字存了再勾，否则用户勾完会发现刚才的修改没落。
+        if (editingId == task.id) commitEdit()
+        // 现取而不是用组合里那份快照：这一行的正文可能刚在 commitEdit 里换过。
+        val current = tasks.firstOrNull { it.id == task.id } ?: return
         val snapshot = tasks
-        val toDone = !task.done
-        tasks = snapshot.relocate(task.copy(done = toDone))
+        val toDone = !current.done
+        tasks = snapshot.relocate(current.copy(done = toDone))
         runWrite {
             try {
-                tasks = tasks.relocate(api.setTaskDone(task.id, toDone))
+                val got = api.setTaskDone(current.id, toDone)
+                // 只合完成态那几列，别把正文那条可能还在飞的 PATCH 抹回去。
+                val merged = tasks.firstOrNull { it.id == got.id }
+                    ?.copy(done = got.done, doneAt = got.doneAt, doneWeekStart = got.doneWeekStart)
+                    ?: got
+                tasks = tasks.relocate(merged)
             } catch (e: ApiError) {
                 tasks = snapshot
                 throw e
@@ -129,8 +189,10 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
 
     fun removeTask(task: Task) {
         if (busy) return
+        // 删的就是正改着的那条：不必先存一遍再删。
+        if (editingId == task.id) cancelEdit()
         val snapshot = tasks
-        armed = armed - task.id
+        armedId = null
         tasks = snapshot.filterNot { it.id == task.id }
         runWrite {
             try {
@@ -160,11 +222,25 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         }
     }
 
+    // 返回键放弃这次修改；键盘开着时那一下先由系统收键盘。
+    BackHandler(enabled = editingId != null) { cancelEdit() }
+    // 删除确认也吃一次返回：正等着第二次点击时，返回键不该直接退出应用。
+    BackHandler(enabled = editingId == null && armedId != null) { armedId = null }
+
     val open = tasks.filter { !it.done }
     val done = tasks.filter { it.done }
     val visible = if (expanded) open else open.take(TOP_COUNT)
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            // 空白处、标题、发丝线这些没人接的点击也算"点了别处"，撤掉删除确认。
+            // 子控件会把各自的点击吃掉，所以这里接到的本来就是剩下那部分。
+            .pointerInput(armedId) {
+                if (armedId == null) return@pointerInput
+                detectTapGestures { armedId = null }
+            },
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 10.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -174,7 +250,10 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                 value = draft,
                 onValueChange = { draft = it },
                 placeholder = "要做的事，回车记下",
-                modifier = Modifier.weight(1f),
+                // 点输入框本身就是换了意图：撤掉删除确认，输入与光标照常。
+                modifier = Modifier
+                    .weight(1f)
+                    .dismissOnTouch(armedId != null) { armedId = null },
                 keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
                 onSubmit = { addTask() },
                 textStyle = MaterialTheme.typography.bodyMedium,
@@ -221,9 +300,14 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                         ids = visible.map { it.id },
                         draggable = visible.size > 1 && !busy,
                         enabled = !busy,
-                        armed = task.id in armed,
-                        onArm = { armed = armed + task.id },
-                        onClear = { armed = armed - task.id },
+                        armed = armedId == task.id,
+                        editing = editingId == task.id,
+                        editDraft = editDraft,
+                        onEditStart = { startEdit(task) },
+                        onEditChange = { editDraft = it },
+                        onEditCommit = { commitEdit() },
+                        onArm = { armedId = task.id },
+                        onClear = { armedId = null },
                         onDelete = { removeTask(task) },
                         onToggle = { toggle(task) },
                         onCommit = { from, to -> commitOrder(from, to) },
@@ -245,7 +329,10 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                         }
                         TextAction(
                             if (expanded) "收起" else "展开",
-                            onClick = { expanded = !expanded },
+                            onClick = {
+                                armedId = null
+                                expanded = !expanded
+                            },
                             enabled = !busy,
                         )
                     }
@@ -267,9 +354,14 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                             ids = emptyList(),
                             draggable = false,
                             enabled = !busy,
-                            armed = task.id in armed,
-                            onArm = { armed = armed + task.id },
-                            onClear = { armed = armed - task.id },
+                            armed = armedId == task.id,
+                            editing = editingId == task.id,
+                            editDraft = editDraft,
+                            onEditStart = { startEdit(task) },
+                            onEditChange = { editDraft = it },
+                            onEditCommit = { commitEdit() },
+                            onArm = { armedId = task.id },
+                            onClear = { armedId = null },
                             onDelete = { removeTask(task) },
                             onToggle = { toggle(task) },
                             onCommit = { _, _ -> },
@@ -343,6 +435,11 @@ private fun TaskRow(
     draggable: Boolean,
     enabled: Boolean,
     armed: Boolean,
+    editing: Boolean,
+    editDraft: String,
+    onEditStart: () -> Unit,
+    onEditChange: (String) -> Unit,
+    onEditCommit: () -> Unit,
     onArm: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
@@ -370,55 +467,77 @@ private fun TaskRow(
             TaskCheckbox(checked = task.done, onToggle = onToggle, enabled = enabled)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Text(
-                    task.body,
-                    style = MaterialTheme.typography.bodyLarge,
-                    color = if (task.done) InkSoft else Ink,
-                    textDecoration = if (task.done) TextDecoration.LineThrough else null,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis,
-                )
-                task.doneAt?.let {
-                    // 只给日期：归哪一周是服务端在勾掉那一刻算死的（design §2），
-                    // 界面上再精确到分钟也帮不上决定，只会挤掉正文。
-                    Text(
-                        "完成于 ${formatDay(it)}",
-                        style = MaterialTheme.typography.labelSmall,
-                        color = InkSoft,
+                if (editing) {
+                    // 点正文就地改：同一个 UnderlineField，回车落定、返回放弃（ADR-0020）。
+                    val focus = remember { FocusRequester() }
+                    LaunchedEffect(Unit) { focus.requestFocus() }
+                    UnderlineField(
+                        value = editDraft,
+                        onValueChange = onEditChange,
+                        placeholder = "改这一句",
+                        focusRequester = focus,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        onSubmit = onEditCommit,
+                        textStyle = MaterialTheme.typography.bodyLarge,
                     )
+                } else {
+                    Text(
+                        task.body,
+                        style = MaterialTheme.typography.bodyLarge,
+                        color = if (task.done) InkSoft else Ink,
+                        textDecoration = if (task.done) TextDecoration.LineThrough else null,
+                        maxLines = 2,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(enabled = enabled, onClick = onEditStart),
+                    )
+                    task.doneAt?.let {
+                        // 只给日期：归哪一周是服务端在勾掉那一刻算死的（design §2），
+                        // 界面上再精确到分钟也帮不上决定，只会挤掉正文。
+                        Text(
+                            "完成于 ${formatDay(it)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = InkSoft,
+                        )
+                    }
                 }
             }
-            IconAction(
-                DeskIcon.Delete,
-                if (armed) "确认删" else "删",
-                armed = armed,
-                enabled = enabled,
-                color = InkSoft,
-                onClick = {
-                    if (!armed) onArm() else {
-                        onClear()
-                        onDelete()
-                    }
-                },
-            )
-            if (draggable) {
-                DragHandle(
-                    rowId = task.id,
-                    rowIndex = index,
-                    active = dragging,
-                    onStart = { drag.heights[task.id]?.let { drag.begin(index, it, ids) } },
-                    onMove = { drag.move(it) },
-                    onDrop = {
-                        val from = drag.index
-                        val to = drag.target
-                        // 先清手势状态再交新顺序：列表一换，每行的自然位置都变了，
-                        // 这时候留着 translationY 会让全列表一起偏一截。
-                        drag.idle()
-                        if (from != to) onCommit(from, to)
+            if (!editing) {
+                IconAction(
+                    DeskIcon.Delete,
+                    if (armed) "确认删" else "删",
+                    armed = armed,
+                    enabled = enabled,
+                    color = InkSoft,
+                    onClick = {
+                        if (!armed) onArm() else {
+                            onClear()
+                            onDelete()
+                        }
                     },
                 )
-            } else {
-                Spacer(Modifier.width(26.dp))
+                if (draggable) {
+                    DragHandle(
+                        rowId = task.id,
+                        rowIndex = index,
+                        active = dragging,
+                        onStart = {
+                            // 抓起把手也是换了意图，删除确认作废。
+                            onClear()
+                            drag.heights[task.id]?.let { drag.begin(index, it, ids) }
+                        },
+                        onMove = { drag.move(it) },
+                        onDrop = {
+                            val from = drag.index
+                            val to = drag.target
+                            // 先清手势状态再交新顺序：列表一换，每行的自然位置都变了，
+                            // 这时候留着 translationY 会让全列表一起偏一截。
+                            drag.idle()
+                            if (from != to) onCommit(from, to)
+                        },
+                    )
+                } else {
+                    Spacer(Modifier.width(26.dp))
+                }
             }
         }
         Hairline(Modifier.padding(horizontal = 20.dp))

@@ -2,8 +2,8 @@
 
 > 状态：生效中
 > 摘要：三张表的字段与归属算法、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)。
-> 更新：2026-11-26（新增待办：`tasks` 表、五个接口、报表取数纳入本周期完成的待办；同日按 ADR-0015 加更新通道两条接口与 `MEMORA_RELEASE_DIR`）
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)。
+> 更新：2026-11-27（澄清改待办正文只动 `body`：不重编 `rank`、不碰完成态与归属列，ADR-0020；2026-11-26 新增待办：`tasks` 表、五个接口、报表取数纳入本周期完成的待办；同日按 ADR-0015 加更新通道两条接口与 `MEMORA_RELEASE_DIR`）
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -46,7 +46,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 索引：`idx_tasks_open (done, rank)`、`idx_tasks_done (done, done_at DESC)`、`idx_tasks_done_week (done_week_start)`、`idx_tasks_done_month (done_month_start)`。
 
-`rank` 只在 `done = 0` 的集合里有意义，且**每次写操作之后整体重编**：新建排第 1（刚想起来的事正因为要先做才会去记），删除、勾掉、取消勾选、拖拽都走"按给定顺序重编号"这一条路径。代价是一次拖拽写 N 行，换来的是"前 5 名"这个查询不需要处理并列、空洞、分数耗尽这三种情况——待办量级是几十条（估算），一个事务里重写全部未完成的 rank 毫无压力。
+`rank` 只在 `done = 0` 的集合里有意义，且**凡改到顺序的写操作之后整体重编**：新建排第 1（刚想起来的事正因为要先做才会去记），删除、勾掉、取消勾选、拖拽都走"按给定顺序重编号"这一条路径。改正文例外：`PATCH {body}` 只动 `body` 与 `updated_at`，rank、完成态与归属列原样（[ADR-0020](../decisions/0020-inline-task-edit.md)）。代价是一次拖拽写 N 行，换来的是"前 5 名"这个查询不需要处理并列、空洞、分数耗尽这三种情况——待办量级是几十条（估算），一个事务里重写全部未完成的 rank 毫无压力。
 
 已完成的行保留它勾掉那一刻的 rank 但不再维护，已完成区按 `done_at` 倒序显示。`done = 1` 的行不参与重编号，所以 rank 的连续性约束只覆盖未完成集。
 
@@ -110,7 +110,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `POST /v1/reports/{kind}/{period_start}/generate` | 手动生成 | 同步返回结果；失败也要落 `status=failed` |
 | `GET /v1/tasks` | 待办全量 | 无分页：未完成按 `rank` 升序、已完成按 `done_at` 降序，一次返回 `{tasks, open_count, done_count}`。不分页的理由写在下面 §5.1 |
 | `POST /v1/tasks` | 新建 | 请求 `{body}`；响应含 `rank=1`、`done=false`——新建插到队首，其余顺延 |
-| `PATCH /v1/tasks/{id}` | 改 | 接受 `{body}` 与/或 `{done}`；`done` 从 true 改回 false 时清空 `done_at` 并把这条排到未完成队尾 |
+| `PATCH /v1/tasks/{id}` | 改 | 接受 `{body}` 与/或 `{done}`；只改 `{body}` 时不重编 rank、不碰完成态与归属列（ADR-0020）；`done` 从 true 改回 false 时清空 `done_at` 并把这条排到未完成队尾 |
 | `POST /v1/tasks/reorder` | 整列重排 | 请求 `{ids:[已完成拖拽的新顺序]}`，必须是**全部未完成 id 的一个排列**；服务端在一个事务里按数组下标重写 `rank=1..n`，返回重排后的列表。ids 有重复、有未知 id、漏了某条未完成 → 400 `bad_request`，不部分生效 |
 | `DELETE /v1/tasks/{id}` | 删除 | 幂等，已删除返回 404；删的是未完成项时后面的 rank 自动收紧 |
 | `GET /v1/app/release` | 有没有新版可装 | 读 `<MEMORA_RELEASE_DIR>/release.json`，回 `{version_code, version_name, notes, size}`；`size` 由服务端 stat `app.apk` 得到，不是发布时手填的。没配目录或文件不在 → 404 `not_released`；清单在而包不在（发了一半）→ 500 `release_bad` |

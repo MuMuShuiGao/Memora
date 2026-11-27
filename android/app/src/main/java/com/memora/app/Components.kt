@@ -39,6 +39,8 @@ import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.rotate
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
@@ -47,6 +49,8 @@ import androidx.compose.ui.graphics.SolidColor
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.PointerEventPass
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.TextStyle
@@ -82,6 +86,7 @@ fun UnderlineField(
     onSubmit: () -> Unit = {},
     visualTransformation: VisualTransformation = VisualTransformation.None,
     textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+    focusRequester: FocusRequester? = null,
 ) {
     val interactions = remember { MutableInteractionSource() }
     val focused by interactions.collectIsFocusedAsState()
@@ -104,7 +109,8 @@ fun UnderlineField(
             modifier = Modifier
                 .fillMaxWidth()
                 .heightIn(min = 40.dp)
-                .padding(top = 8.dp),
+                .padding(top = 8.dp)
+                .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
             decorationBox = { inner ->
                 Box(contentAlignment = Alignment.CenterStart) {
                     if (value.isEmpty() && placeholder.isNotEmpty()) {
@@ -202,6 +208,18 @@ fun TextAction(
 }
 
 enum class DeskIcon { Add, Refresh, Delete }
+
+// 按进这块区域的任何地方都先撤掉"等第二次确认"的删除。走 Initial 阶段只看不吃：
+// 输入框的光标、选区与点击照常；挂在外层，因为子控件会把 Main 阶段的点击吃掉。
+fun Modifier.dismissOnTouch(active: Boolean, dismiss: () -> Unit): Modifier = pointerInput(active) {
+    if (!active) return@pointerInput
+    awaitPointerEventScope {
+        while (true) {
+            awaitPointerEvent(PointerEventPass.Initial)
+            dismiss()
+        }
+    }
+}
 
 // "加 / 刷新 / 删"这类短动词换成线条符号，省下的横向宽度还给正文。
 // 字形自绘而不用 material-icons：那套是实心字形，笔画和这片发丝线不是一套东西

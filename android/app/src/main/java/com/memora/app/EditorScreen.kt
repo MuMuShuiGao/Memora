@@ -8,6 +8,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.text.BasicTextField
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
@@ -25,6 +26,7 @@ import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.firstOrNull
@@ -72,7 +74,15 @@ fun EditorScreen(
         local.saveDraft(Draft(note?.id, value))
     }
 
-    Column(Modifier.fillMaxSize()) {
+    Column(
+        Modifier
+            .fillMaxSize()
+            // 空白处、标题、计数这些没人接的点击也算"点了别处"，撤掉删除确认。
+            .pointerInput(askDelete) {
+                if (!askDelete) return@pointerInput
+                detectTapGestures { askDelete = false }
+            },
+    ) {
         Row(
             Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
@@ -100,6 +110,8 @@ fun EditorScreen(
                 .weight(1f)
                 .fillMaxWidth()
                 .padding(horizontal = 20.dp, vertical = 8.dp)
+                // 点正文（接着写）就撤掉删除确认；Initial 阶段只看不吃，光标与选区不受影响。
+                .dismissOnTouch(askDelete) { askDelete = false }
                 .drawBehind {
                     val x = 12.dp.toPx()
                     drawLine(
@@ -189,6 +201,7 @@ fun EditorScreen(
                 enabled = !busy && value.isNotBlank() && !over,
                 modifier = Modifier.widthIn(min = 88.dp),
                 onClick = {
+                    askDelete = false
                     busy = true
                     val body = value.trim()
                     scope.launch {
