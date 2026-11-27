@@ -24,8 +24,8 @@ android {
         // Keystore 里的 AES/GCM 从 23 起可用，26 是省掉一堆兼容分支的起点。
         minSdk = 26
         targetSdk = 35
-        versionCode = 6
-        versionName = "0.6"
+        versionCode = 7
+        versionName = "0.7"
     }
 
     // 两个环境只差两样东西：默认地址，和打进包的那张证书（design/android-client.md §6）。
