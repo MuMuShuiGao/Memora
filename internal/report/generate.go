@@ -235,12 +235,16 @@ func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.
 		fmt.Fprintf(&b, "[%s] %s\n", n.CreatedAt.In(g.loc).Format("2006-01-02"), n.Body)
 	}
 
-	b.WriteString("\n本周期内已勾掉的待办，按完成时间升序，方括号内是完成日期：\n\n")
+	b.WriteString("\n本周期内已勾掉的待办，按完成时间升序，方括号内是完成日期；写了完成心得的在正文后附上：\n\n")
 	if len(tasks) == 0 {
 		b.WriteString("（无）\n")
 	}
 	for _, t := range tasks {
-		fmt.Fprintf(&b, "[%s] %s\n", t.DoneAt.In(g.loc).Format("2006-01-02"), t.Body)
+		fmt.Fprintf(&b, "[%s] %s", t.DoneAt.In(g.loc).Format("2006-01-02"), t.Body)
+		if t.Takeaway != "" {
+			fmt.Fprintf(&b, "（心得：%s）", t.Takeaway)
+		}
+		b.WriteString("\n")
 	}
 
 	fmt.Fprintf(&b, "\n共 %d 条素材：%d 条记录 + %d 条已完成待办。", len(notes)+len(tasks), len(notes), len(tasks))

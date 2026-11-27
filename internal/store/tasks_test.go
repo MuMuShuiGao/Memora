@@ -355,6 +355,47 @@ func TestUpdateTaskDueOnKeepsRank(t *testing.T) {
 	}
 }
 
+// 心得只属于这条待办：改它不碰名次与完成态，取消勾选也不清，空串写回等于清掉（ADR-0027）。
+func TestUpdateTaskTakeawaySurvivesUncheck(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	base := time.Date(2026, time.November, 24, 9, 0, 0, 0, time.UTC)
+	ids := seedTasks(t, s, ctx, "交周报", "买牛奶")
+
+	got, err := s.UpdateTaskTakeaway(ctx, ids[0], "评审过了，下周排联调", base.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("UpdateTaskTakeaway: %v", err)
+	}
+	if got.Takeaway != "评审过了，下周排联调" || got.Rank != 1 || got.Done {
+		t.Errorf("写心得后 = %q rank %d done %v, 期望原文/1/false", got.Takeaway, got.Rank, got.Done)
+	}
+	if _, err := s.UpdateTaskTakeaway(ctx, 9999, "不存在", base); !errors.Is(err, ErrNotFound) {
+		t.Errorf("未知 id = %v, 期望 ErrNotFound", err)
+	}
+
+	if _, err := s.SetTaskDone(ctx, ids[0], true, base.Add(2*time.Hour), "2026-11-23", "2026-11-01"); err != nil {
+		t.Fatalf("勾掉: %v", err)
+	}
+	if _, err := s.SetTaskDone(ctx, ids[0], false, base.Add(3*time.Hour), noPeriod, noPeriod); err != nil {
+		t.Fatalf("取消勾选: %v", err)
+	}
+	back, err := s.GetTask(ctx, ids[0])
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if back.Takeaway != "评审过了，下周排联调" {
+		t.Errorf("取消勾选后心得 = %q, 期望保留", back.Takeaway)
+	}
+
+	cleared, err := s.UpdateTaskTakeaway(ctx, ids[0], "", base.Add(4*time.Hour))
+	if err != nil {
+		t.Fatalf("清空心得的调用失败: %v", err)
+	}
+	if cleared.Takeaway != "" || cleared.Done {
+		t.Errorf("清空后 = %q done %v, 期望空串/false", cleared.Takeaway, cleared.Done)
+	}
+}
+
 func TestBackfillTaskDueOnUsesLocalDay(t *testing.T) {
 	s := openTestStore(t)
 	ctx := context.Background()
@@ -426,6 +467,9 @@ func TestOpenAddsDueOnToLegacyTasks(t *testing.T) {
 	}
 	if len(list) != 1 || list[0].DueOn != "" {
 		t.Fatalf("旧库读完 = %+v, 期望一条且 due_on 为空", list)
+	}
+	if list[0].Takeaway != "" {
+		t.Errorf("旧库的 takeaway = %q, 期望补列后是空串", list[0].Takeaway)
 	}
 
 	plus8 := time.FixedZone("UTC+8", 8*3600)

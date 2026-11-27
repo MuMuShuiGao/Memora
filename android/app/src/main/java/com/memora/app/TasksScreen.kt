@@ -40,8 +40,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.graphicsLayer
@@ -87,6 +89,11 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     var editDraft by remember { mutableStateOf("") }
     var editDueOn by remember { mutableStateOf("") }
     var pickingDate by remember { mutableStateOf(false) }
+    // 完成心得（ADR-0027）：屏底一条可跳过的提示，同一时刻只认一条待办。
+    // 正在写时不抢——新的完成不会换掉手上的草稿；草稿本就不落盘，切走即丢。
+    var takeawayId by remember { mutableStateOf<Long?>(null) }
+    var takeawayEditing by remember { mutableStateOf(false) }
+    var takeawayDraft by remember { mutableStateOf("") }
 
     val drag = remember { DragState() }
     // 结构写要让路给还在飞的勾选；勾选本身只锁自己那一行。
@@ -209,6 +216,57 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         pickingDate = false
     }
 
+    fun closeTakeaway() {
+        takeawayId = null
+        takeawayEditing = false
+        takeawayDraft = ""
+    }
+
+    fun startTakeaway(task: Task) {
+        if (busy || task.id in togglingIds) return
+        // 换到心得就是换了意图：正文那边的草稿先落定，删除确认作废。
+        if (editingId != null) commitEdit()
+        armedId = null
+        takeawayId = task.id
+        takeawayEditing = true
+        takeawayDraft = task.takeaway
+    }
+
+    fun offerTakeaway(task: Task) {
+        // 已经写过的不再问；正在写不打断。跳过、或写完一条之后再勾，下一条照常会问。
+        if (task.takeaway.isNotEmpty() || takeawayEditing) return
+        takeawayId = task.id
+        takeawayEditing = false
+        takeawayDraft = ""
+    }
+
+    fun saveTakeaway() {
+        val task = tasks.firstOrNull { it.id == takeawayId } ?: run {
+            closeTakeaway()
+            return
+        }
+        val text = takeawayDraft.trim()
+        closeTakeaway()
+        if (text == task.takeaway) return
+        // 先记账再发请求：写完这一句，提示就该走开，不必等往返。
+        tasks = tasks.map { if (it.id == task.id) it.copy(takeaway = text) else it }
+        scope.launch {
+            notice = null
+            try {
+                val got = api.updateTask(task.id, takeaway = text)
+                tasks = tasks.map { if (it.id == got.id) it.copy(takeaway = got.takeaway) else it }
+            } catch (e: ApiError) {
+                if (e.kind == ApiError.Kind.Unauthorized) {
+                    onUnauthorized()
+                } else {
+                    tasks = tasks.map { if (it.id == task.id) it.copy(takeaway = task.takeaway) else it }
+                    notice = describe(e)
+                    reload++
+                }
+            }
+        }
+    }
+
     fun toggle(task: Task) {
         // 一次只锁这一行：别行还能继续勾，连点同一行也不会叠出两次 PATCH。
         if (busy || task.id in togglingIds) return
@@ -230,6 +288,12 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                     ?.copy(done = got.done, doneAt = got.doneAt, doneWeekStart = got.doneWeekStart)
                     ?: got
                 tasks = tasks.relocate(merged)
+                if (merged.done) {
+                    offerTakeaway(merged)
+                } else if (takeawayId == merged.id) {
+                    // 取消勾选不清心得，但正对着它的那条提示已经无话可说。
+                    closeTakeaway()
+                }
             } catch (e: ApiError) {
                 if (e.kind == ApiError.Kind.Unauthorized) {
                     onUnauthorized()
@@ -254,6 +318,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         if (!structuralEnabled) return
         // 删的就是正改着的那条：不必先存一遍再删。
         if (editingId == task.id) cancelEdit()
+        if (takeawayId == task.id) closeTakeaway()
         val snapshot = tasks
         armedId = null
         tasks = snapshot.filterNot { it.id == task.id }
@@ -291,10 +356,19 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     BackHandler(enabled = !pickingDate && editingId != null) { cancelEdit() }
     // 删除确认也吃一次返回：正等着第二次点击时，返回键不该直接退出应用。
     BackHandler(enabled = !pickingDate && editingId == null && armedId != null) { armedId = null }
+    // 心得编辑开着时，返回键先放弃这句草稿，不退出应用。
+    BackHandler(enabled = !pickingDate && editingId == null && armedId == null && takeawayEditing) {
+        closeTakeaway()
+    }
 
     val open = tasks.filter { !it.done }
     val done = tasks.filter { it.done }
     val visible = if (expanded) open else open.take(TOP_COUNT)
+    // 提示条只认还留在已完成区的那一条：被删掉或取消勾选之后它自动消失。
+    val takeawayTask = tasks.firstOrNull { it.id == takeawayId && it.done }
+    LaunchedEffect(takeawayTask?.id) {
+        if (takeawayId != null && takeawayTask == null) closeTakeaway()
+    }
 
     Column(
         Modifier
@@ -399,6 +473,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                             focusManager.clearFocus(force = true)
                             pickingDate = true
                         },
+                        onTakeawayStart = { startTakeaway(task) },
                         onArm = { armedId = task.id },
                         onClear = { armedId = null },
                         onDelete = { removeTask(task) },
@@ -478,6 +553,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                                     focusManager.clearFocus(force = true)
                                     pickingDate = true
                                 },
+                                onTakeawayStart = { startTakeaway(task) },
                                 onArm = { armedId = task.id },
                                 onClear = { armedId = null },
                                 onDelete = { removeTask(task) },
@@ -485,6 +561,70 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                                 onCommit = { _, _ -> },
                             )
                         }
+                    }
+                }
+            }
+        }
+
+        takeawayTask?.let { task ->
+            Hairline(Modifier.padding(horizontal = 20.dp))
+            if (!takeawayEditing) {
+                Row(
+                    Modifier.fillMaxWidth().padding(start = 20.dp, end = 8.dp, top = 6.dp, bottom = 2.dp),
+                    verticalAlignment = Alignment.CenterVertically,
+                ) {
+                    Column(Modifier.weight(1f)) {
+                        Text(
+                            "这条做完了，留一句心得？",
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = Ink,
+                        )
+                        Text(
+                            task.body,
+                            style = MaterialTheme.typography.labelSmall,
+                            color = InkSoft,
+                            maxLines = 1,
+                            overflow = TextOverflow.Ellipsis,
+                        )
+                    }
+                    TextAction("先不写", onClick = { closeTakeaway() }, color = InkSoft)
+                    TextAction("写一句", onClick = { startTakeaway(task) }, color = Vermilion)
+                }
+            } else {
+                val focus = remember { FocusRequester() }
+                LaunchedEffect(task.id) { focus.requestFocus() }
+                val takeawayChars = takeawayDraft.codePointCount(0, takeawayDraft.length)
+                Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text(
+                            "心得 · 最多 ${MemoApi.MAX_TAKEAWAY_CHARS} 字",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = InkSoft,
+                            modifier = Modifier.weight(1f),
+                        )
+                        if (takeawayChars > 40) {
+                            Text(
+                                "$takeawayChars/${MemoApi.MAX_TAKEAWAY_CHARS}",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = if (takeawayChars >= MemoApi.MAX_TAKEAWAY_CHARS) Vermilion else InkSoft,
+                            )
+                        }
+                    }
+                    UnderlineField(
+                        value = takeawayDraft,
+                        onValueChange = { takeawayDraft = clampTakeaway(it) },
+                        placeholder = "比如：比预期多花半天，评审一次过了",
+                        focusRequester = focus,
+                        singleLine = false,
+                        minLines = 1,
+                        maxLines = 3,
+                        keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                        onSubmit = { saveTakeaway() },
+                        textStyle = MaterialTheme.typography.bodyMedium,
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                        TextAction("取消", onClick = { closeTakeaway() }, color = InkSoft)
+                        TextAction("存下", onClick = { saveTakeaway() }, color = Vermilion)
                     }
                 }
             }
@@ -575,6 +715,7 @@ private fun TaskRow(
     onEditChange: (String) -> Unit,
     onEditCommit: () -> Unit,
     onPickDate: () -> Unit,
+    onTakeawayStart: () -> Unit,
     onArm: () -> Unit,
     onClear: () -> Unit,
     onDelete: () -> Unit,
@@ -601,7 +742,11 @@ private fun TaskRow(
             Modifier.fillMaxWidth().padding(start = 13.dp, end = 4.dp, top = 5.dp, bottom = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            TaskCheckbox(checked = task.done, onToggle = onToggle, enabled = enabled)
+            // 带心得的已完成条目会有三四行，居中会把框浮到心得那一行去；
+            // 勾选框认正文第一行，右边那组操作仍随整行居中。
+            Box(Modifier.align(Alignment.Top)) {
+                TaskCheckbox(checked = task.done, onToggle = onToggle, enabled = enabled)
+            }
             Spacer(Modifier.width(4.dp))
             Column(Modifier.weight(1f)) {
                 if (editing) {
@@ -637,6 +782,23 @@ private fun TaskRow(
                         overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.clickable(enabled = enabled && !togglePending, onClick = onEditStart),
                     )
+                    // 已完成的那条：心得在正文下面，像稿纸上的一行批注；没写的留一个安静的入口。
+                    if (task.done) {
+                        if (task.takeaway.isNotEmpty()) {
+                            TakeawayNote(
+                                text = task.takeaway,
+                                enabled = enabled && !togglePending,
+                                onClick = onTakeawayStart,
+                            )
+                        } else {
+                            TextAction(
+                                "补一句心得",
+                                onClick = onTakeawayStart,
+                                enabled = enabled && !togglePending,
+                                color = InkSoft,
+                            )
+                        }
+                    }
                     task.doneAt?.let {
                         // 只给日期：归哪一周是服务端在勾掉那一刻算死的（design §2），
                         // 界面上再精确到分钟也帮不上决定，只会挤掉正文。
@@ -847,4 +1009,31 @@ private fun List<Task>.relocate(task: Task): List<Task> {
     val newOpen = if (task.done) open else open + task
     val newDone = if (task.done) listOf(task) + finished else finished
     return newOpen + newDone
+}
+
+// 心得是给翻回去看的人留的：衬线小字，左侧一道朱线，点它再改（ADR-0027）。
+@Composable
+private fun TakeawayNote(text: String, enabled: Boolean, onClick: () -> Unit) {
+    Text(
+        text,
+        style = MaterialTheme.typography.bodyMedium,
+        color = InkSoft,
+        modifier = Modifier
+            .fillMaxWidth()
+            .padding(top = 4.dp)
+            .clickable(enabled = enabled, onClickLabel = "改这句心得", onClick = onClick)
+            .drawBehind {
+                drawRect(
+                    color = Vermilion,
+                    size = Size(2.dp.toPx(), size.height),
+                )
+            }
+            .padding(start = 10.dp, top = 2.dp, bottom = 2.dp),
+    )
+}
+
+// 按码点截住输入，和服务端数的是同一件事（ADR-0027）；多粘贴出来的部分不进草稿。
+private fun clampTakeaway(text: String): String {
+    if (text.codePointCount(0, text.length) <= MemoApi.MAX_TAKEAWAY_CHARS) return text
+    return text.substring(0, text.offsetByCodePoints(0, MemoApi.MAX_TAKEAWAY_CHARS))
 }

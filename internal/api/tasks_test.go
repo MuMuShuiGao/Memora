@@ -349,6 +349,62 @@ func TestTaskCreateAndPatchDueOn(t *testing.T) {
 	}
 }
 
+func TestTaskPatchTakeaway(t *testing.T) {
+	h := newHarness(t)
+	created := h.createTask(t, "交周报")
+	if created.Takeaway != "" {
+		t.Fatalf("新待办的心得 = %q, 期望空串", created.Takeaway)
+	}
+	id := strconv.FormatInt(created.ID, 10)
+
+	res, raw := h.do(t, "PATCH", "/v1/tasks/"+id, `{"takeaway":"评审过了，下周排联调"}`, true)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH takeaway = %d %s", res.StatusCode, raw)
+	}
+	var got store.Task
+	if err := json.Unmarshal([]byte(raw), &got); err != nil {
+		t.Fatalf("解析: %v — %s", err, raw)
+	}
+	if got.Takeaway != "评审过了，下周排联调" || got.Rank != created.Rank || got.Done {
+		t.Errorf("写心得后被牵连: %q rank %d done %v", got.Takeaway, got.Rank, got.Done)
+	}
+
+	// 首尾空白去掉；上限按码点算，和正文的 MaxNoteChars 无关。
+	if res, raw := h.do(t, "PATCH", "/v1/tasks/"+id, `{"takeaway":"  评审过了  "}`, true); res.StatusCode != http.StatusOK ||
+		!strings.Contains(raw, `"takeaway":"评审过了"`) {
+		t.Errorf("去空白 = %d %s", res.StatusCode, raw)
+	}
+	limit := strings.Repeat("字", maxTakeawayChars)
+	if res, raw := h.do(t, "PATCH", "/v1/tasks/"+id, `{"takeaway":"`+limit+`"}`, true); res.StatusCode != http.StatusOK {
+		t.Errorf("正好 %d 字 = %d %s, 期望通过", maxTakeawayChars, res.StatusCode, raw)
+	}
+	over := strings.Repeat("字", maxTakeawayChars+1)
+	res, raw = h.do(t, "PATCH", "/v1/tasks/"+id, `{"takeaway":"`+over+`"}`, true)
+	if res.StatusCode != http.StatusBadRequest || !strings.Contains(raw, "50") {
+		t.Errorf("超限 = %d %s, 期望 400 且提到 50", res.StatusCode, raw)
+	}
+
+	// 勾掉、取消勾选都不碰心得：它跟着待办走，不是一次完成动作的副产品（ADR-0027）。
+	if res, raw := h.do(t, "PATCH", "/v1/tasks/"+id, `{"done":true}`, true); res.StatusCode != http.StatusOK ||
+		!strings.Contains(raw, limit) {
+		t.Errorf("勾掉后心得没了: %d %s", res.StatusCode, raw)
+	}
+	if res, raw := h.do(t, "PATCH", "/v1/tasks/"+id, `{"done":false}`, true); res.StatusCode != http.StatusOK ||
+		!strings.Contains(raw, limit) {
+		t.Errorf("取消勾选后心得没了: %d %s", res.StatusCode, raw)
+	}
+
+	// 空串写回等于清掉，但这条待办还在。
+	res, raw = h.do(t, "PATCH", "/v1/tasks/"+id, `{"takeaway":""}`, true)
+	if res.StatusCode != http.StatusOK || !strings.Contains(raw, `"takeaway":""`) {
+		t.Errorf("清空心得的响应 = %d %s", res.StatusCode, raw)
+	}
+
+	if res, raw := h.do(t, "PATCH", "/v1/tasks/9999", `{"takeaway":"x"}`, true); res.StatusCode != http.StatusNotFound {
+		t.Errorf("未知 id = %d %s, 期望 404", res.StatusCode, raw)
+	}
+}
+
 func TestTaskDueOnRejectsBadDates(t *testing.T) {
 	h := newHarness(t)
 	created := h.createTask(t, "合法的一条")

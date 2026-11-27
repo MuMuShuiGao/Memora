@@ -111,6 +111,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	done_week_start  TEXT,
 	done_month_start TEXT,
 	due_on           TEXT    NOT NULL DEFAULT '',
+	takeaway         TEXT    NOT NULL DEFAULT '',
 	created_at       TEXT    NOT NULL,
 	updated_at       TEXT    NOT NULL
 );
@@ -137,7 +138,10 @@ CREATE TABLE IF NOT EXISTS reports (
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("store: 建表: %w", err)
 	}
-	return s.ensureTaskDueOn(ctx)
+	if err := s.ensureTaskDueOn(ctx); err != nil {
+		return err
+	}
+	return s.ensureTaskTakeaway(ctx)
 }
 
 // ensureTaskDueOn 给 ADR-0021 之前建的库补上 due_on 列。带非空默认值的 ADD COLUMN
@@ -156,6 +160,22 @@ func (s *Store) ensureTaskDueOn(ctx context.Context) error {
 	}
 	if _, err := s.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_on)"); err != nil {
 		return fmt.Errorf("store: 建 due_on 索引: %w", err)
+	}
+	return nil
+}
+
+// ensureTaskTakeaway 给 ADR-0027 之前建的库补上 takeaway 列。默认空串即"没写心得"，
+// 不需要回填；这一列也不参与任何查询条件，不建索引。
+func (s *Store) ensureTaskTakeaway(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'takeaway'").Scan(&n); err != nil {
+		return fmt.Errorf("store: 查 tasks 列: %w", err)
+	}
+	if n == 0 {
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE tasks ADD COLUMN takeaway TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("store: 加 takeaway 列: %w", err)
+		}
 	}
 	return nil
 }

@@ -44,6 +44,7 @@
 | [decisions/0024-per-row-toggle-and-state-keeping.md](decisions/0024-per-row-toggle-and-state-keeping.md) | 生效中 | 勾选按行排队只锁被勾那行，加/删/拖序等队列清空；进屏加载失败给「重试」；四页签的选中日、展开与草稿跨切换保留 |
 | [decisions/0025-backup-snapshot-and-offsite-pull.md](decisions/0025-backup-snapshot-and-offsite-pull.md) | 已废弃（被 0026 取代） | serve 每天导出一份 SQLite 快照并保留 5 份，Windows 计划任务每周 scp 拉到本机 |
 | [decisions/0026-manual-offsite-pull.md](decisions/0026-manual-offsite-pull.md) | 生效中 | 服务器每日快照不变，盘外副本由人双击本机脚本拉取，不再注册计划任务 |
+| [decisions/0027-completion-takeaway.md](decisions/0027-completion-takeaway.md) | 生效中 | 已完成待办可留一句 ≤50 字心得，屏底可跳过提示，不强制；心得进报表素材 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
 | [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 三张表的字段与归属算法（待办含安排日期）、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
 | [design/android-client.md](design/android-client.md) | 生效中 | 手机端七屏划分（含日历）、本地只存哪五样、十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |

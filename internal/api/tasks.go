@@ -6,17 +6,23 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"unicode/utf8"
 
 	"memora/internal/period"
 	"memora/internal/store"
 )
 
+// maxTakeawayChars 是完成心得的字数上限（ADR-0027），按码点计：中文一个字算一个，
+// emoji 也算一个，不会因为 UTF-8 字节数不同而少算。
+const maxTakeawayChars = 50
+
 // reorder 一次提交整列未完成 id。上限按 id 的 JSON 长度估：500 条 * 8 字节远在
 // maxBodyBytes 之内，这条上限守的是"客户端把已完成的也塞进来"那种逻辑错。
 type taskPatch struct {
-	Body  *string `json:"body"`
-	Done  *bool   `json:"done"`
-	DueOn *string `json:"due_on"`
+	Body     *string `json:"body"`
+	Done     *bool   `json:"done"`
+	DueOn    *string `json:"due_on"`
+	Takeaway *string `json:"takeaway"`
 }
 
 // taskCreate 的 due_on 缺省时落"服务端本地时区的今天"（ADR-0021）：
@@ -93,8 +99,8 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSON(w, r, &in) {
 		return
 	}
-	if in.Body == nil && in.Done == nil && in.DueOn == nil {
-		s.fail(w, http.StatusBadRequest, "bad_request", `PATCH 要带 {"body":"..."}、{"due_on":"YYYY-MM-DD"} 或 {"done":true/false}`)
+	if in.Body == nil && in.Done == nil && in.DueOn == nil && in.Takeaway == nil {
+		s.fail(w, http.StatusBadRequest, "bad_request", `PATCH 要带 {"body":"..."}、{"due_on":"YYYY-MM-DD"}、{"takeaway":"..."} 或 {"done":true/false}`)
 		return
 	}
 
@@ -122,6 +128,21 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		got, err := s.st.UpdateTaskDueOn(r.Context(), id, day, s.now())
+		if err != nil {
+			s.taskError(w, r, err)
+			return
+		}
+		out = got
+	}
+
+	// 心得可以写也可以清：空串就是清掉（ADR-0027），不区分"没带这个字段"与"带了个空串"。
+	if in.Takeaway != nil {
+		takeaway := strings.TrimSpace(*in.Takeaway)
+		if utf8.RuneCountInString(takeaway) > maxTakeawayChars {
+			s.fail(w, http.StatusBadRequest, "bad_request", "心得最多 50 个字")
+			return
+		}
+		got, err := s.st.UpdateTaskTakeaway(r.Context(), id, takeaway, s.now())
 		if err != nil {
 			s.taskError(w, r, err)
 			return

@@ -68,9 +68,14 @@ class MemoApi(private val baseUrl: String) {
     suspend fun createTask(body: String, dueOn: String): Task =
         sendBody("POST", "/v1/tasks", TaskCreateRequest(body, dueOn))
 
-    // 正文与安排日期可以一起改：空着的字段不往请求里放，服务端只动收到的那几列。
-    suspend fun updateTask(id: Long, body: String? = null, dueOn: String? = null): Task =
-        sendBody("PATCH", "/v1/tasks/$id", TaskUpdateRequest(body, dueOn))
+    // 正文、安排日期与完成心得可以一起改：空着的字段不往请求里放，服务端只动收到的那几列。
+    // 心得传空串是"清掉"，不是"没改"——这两件事在 PATCH 里靠"带没带这个字段"区分。
+    suspend fun updateTask(
+        id: Long,
+        body: String? = null,
+        dueOn: String? = null,
+        takeaway: String? = null,
+    ): Task = sendBody("PATCH", "/v1/tasks/$id", TaskUpdateRequest(body, dueOn, takeaway))
 
     suspend fun setTaskDone(id: Long, done: Boolean): Task =
         sendBody("PATCH", "/v1/tasks/$id", DoneRequest(done))
@@ -243,6 +248,7 @@ class MemoApi(private val baseUrl: String) {
     private data class TaskUpdateRequest(
         val body: String? = null,
         @SerialName("due_on") val dueOn: String? = null,
+        val takeaway: String? = null,
     )
 
     @Serializable
@@ -255,6 +261,9 @@ class MemoApi(private val baseUrl: String) {
         // 输入框计录用这个数字，服务端也有一份并会在超限时回 413。两处都有是有意的取舍，
         // 见 docs/design/android-client.md 的未决问题。
         const val MAX_NOTE_CHARS = 2000
+
+        // 完成心得的字数上限，按码点计（ADR-0027）。服务端同样拦一道，超限回 400。
+        const val MAX_TAKEAWAY_CHARS = 50
 
         // 一次拉这么多。服务端的上限就是 200（internal/api/notes.go 的 maxListLimit），
         // 取满它能让"更早的"在绝大多数情况下一次到底。

@@ -21,7 +21,10 @@ type Task struct {
 	DoneWeekStart  string     `json:"done_week_start"`
 	DoneMonthStart string     `json:"done_month_start"`
 	// DueOn 是安排日期（YYYY-MM-DD，服务端本地时区），只决定日历放在哪一格（ADR-0021）。
-	DueOn     string    `json:"due_on"`
+	DueOn string `json:"due_on"`
+	// Takeaway 是完成心得（ADR-0027），空串表示没写。它属于这条待办，
+	// 取消勾选时不清，重新勾上还在。
+	Takeaway  string    `json:"takeaway"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
 }
@@ -30,7 +33,7 @@ type Task struct {
 // 它是 400 而不是 500：客户端拿的是服务端自己给的列表，对不上只可能是它过期了。
 var ErrBadOrder = errors.New("store: 待办顺序与未完成集合不一致")
 
-const taskColumns = "id, body, done, rank, done_at, done_week_start, done_month_start, due_on, created_at, updated_at"
+const taskColumns = "id, body, done, rank, done_at, done_week_start, done_month_start, due_on, takeaway, created_at, updated_at"
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var (
@@ -41,7 +44,7 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		createdAt        string
 		updatedAt        string
 	)
-	err := row.Scan(&t.ID, &t.Body, &done, &t.Rank, &doneAt, &doneWeek, &doneMo, &t.DueOn, &createdAt, &updatedAt)
+	err := row.Scan(&t.ID, &t.Body, &done, &t.Rank, &doneAt, &doneWeek, &doneMo, &t.DueOn, &t.Takeaway, &createdAt, &updatedAt)
 	if err != nil {
 		return t, err
 	}
@@ -161,6 +164,21 @@ func (s *Store) UpdateTaskDueOn(ctx context.Context, id int64, dueOn string, now
 		dueOn, encodeTime(now.UTC()), id)
 	if err != nil {
 		return Task{}, fmt.Errorf("store: 改待办日期 %d: %w", id, err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return Task{}, ErrNotFound
+	}
+	return s.GetTask(ctx, id)
+}
+
+// UpdateTaskTakeaway 只改完成心得。与改正文、改日期一样，不碰 rank、完成态与归属列；
+// 空串表示清掉（ADR-0027）。
+func (s *Store) UpdateTaskTakeaway(ctx context.Context, id int64, takeaway string, now time.Time) (Task, error) {
+	res, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET takeaway = ?, updated_at = ? WHERE id = ?",
+		takeaway, encodeTime(now.UTC()), id)
+	if err != nil {
+		return Task{}, fmt.Errorf("store: 改待办心得 %d: %w", id, err)
 	}
 	if affected, _ := res.RowsAffected(); affected == 0 {
 		return Task{}, ErrNotFound

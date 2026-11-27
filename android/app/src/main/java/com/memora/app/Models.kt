@@ -27,6 +27,8 @@ data class Task(
     val done: Boolean = false,
     val rank: Int = 0,
     @SerialName("due_on") val dueOn: String = "",
+    // 完成心得（ADR-0027）：空串就是没写；取消勾选不会清掉它。
+    val takeaway: String = "",
     @SerialName("done_at") val doneAt: String? = null,
     @SerialName("done_week_start") val doneWeekStart: String = "",
 )

@@ -173,6 +173,35 @@ func TestCompletedTaskJoinsThePromptAsItsOwnSection(t *testing.T) {
 	}
 }
 
+// 心得跟在它那条待办后面进提示词，写法固定是「（心得：…）」；没写心得的不许出现空括号，
+// 条数也仍按待办算，心得不是独立素材（ADR-0027、design §6 1.3）。
+func TestTakeawayJoinsPromptWithMarker(t *testing.T) {
+	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
+	g, st := newTestGenerator(t, &fakeCompleter{}, &now)
+	ctx := context.Background()
+
+	with := seedTask(t, st, "联调完待办接口", now.Add(-2*time.Hour), now.Add(-time.Hour))
+	if _, err := st.UpdateTaskTakeaway(ctx, with.ID, "比计划多花半天，联调环境已就绪", now.Add(-30*time.Minute)); err != nil {
+		t.Fatalf("UpdateTaskTakeaway: %v", err)
+	}
+	seedTask(t, st, "买牛奶", now.Add(-2*time.Hour), now.Add(-time.Hour))
+
+	rep, err := g.Generate(ctx, Week, "2026-11-23")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if *rep.SourceCount != 2 {
+		t.Errorf("source_count = %d, 期望 2（心得不单算一条素材）", *rep.SourceCount)
+	}
+	user := fake(g).user
+	if !strings.Contains(user, "联调完待办接口（心得：比计划多花半天，联调环境已就绪）") {
+		t.Errorf("心得没跟在待办后面进提示词:\n%s", user)
+	}
+	if !strings.Contains(user, "买牛奶\n") || strings.Contains(user, "买牛奶（心得") {
+		t.Errorf("没写心得的待办不该出现心得括号:\n%s", user)
+	}
+}
+
 func TestOnlyTasksStillGenerates(t *testing.T) {
 	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
 	llm := &fakeCompleter{}
