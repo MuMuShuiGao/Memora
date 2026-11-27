@@ -2,7 +2,7 @@
 
 > 状态：生效中
 > 摘要：当前进度快照与断点，新会话从这里接上
-> 更新：2026-11-27 01:05
+> 更新：2026-11-27 11:26
 
 这份文件只描述**现在**。已完成的历史进 ADR 或对应设计文档，卡了两周以上的事项应该转成 ADR 或 refactor 方案，不要赖在这里。上限 60 行。
 
@@ -18,7 +18,7 @@
 ## 卡在哪
 
 - **不卡编码**，上线只剩真模型 key（真机 2026-11-26 23:08 已连上）：安全组入方向 8443/TCP 已放行并实测——公网 `/healthz` 从需求方 Windows 回 200（`--cacert` 校验通过，证书 SAN 就是公网 IP）；服务由 systemd 跑，证书在 `/etc/memora/tls/server.crt`（目录 root 700，读需 sudo）；口令已用真值验过（`/v1/notes` 200），服务器上的口令明文已删。`MEMORA_LLM_API_KEY` 仍为空。
-- **更新通道已开启，v0.3 已发（2026-11-27 00:00）**：`/etc/memora/memora.env` 加了 `MEMORA_RELEASE_DIR=/var/lib/memora/release`；发版用户 `ubuntu` 已入 `memora` 组、`/var/lib/memora` 改 770（否则 `release.sh` 直接 scp 没写权限）；**云机二进制已重建安装**——旧二进制根本没有 `/v1/app/release`（未带口令实测 404，配了 env 也还是 404），重建到 `38a2dc9` 后两条路由回 401。`/var/lib/memora/release` 里是 `app.apk`（sha256 `eeff78f6…`）与 `release.json`（versionCode 3 / 0.3 / notes），`memora` 用户读得到。手机提醒行与下载安装还待真实打开 App 确认。
+- **更新通道已开启，v0.4 已发（2026-11-27 11:22）**：`/etc/memora/memora.env` 加了 `MEMORA_RELEASE_DIR=/var/lib/memora/release`；发版用户 `ubuntu` 已入 `memora` 组、`/var/lib/memora` 改 770（否则 `release.sh` 直接 scp 没写权限）；**云机二进制已重建安装**——旧二进制根本没有 `/v1/app/release`（未带口令实测 404，配了 env 也还是 404），重建到 `38a2dc9` 后两条路由回 401。`/var/lib/memora/release` 里是 `app.apk`（sha256 `93a9d1ef…`，与本地编出的一致）与 `release.json`（versionCode 4 / 0.4 / notes），`memora` 用户读得到；公网 `/v1/app/release` 未带口令回 401、`/healthz` 200（实测）。手机提醒行与下载安装还待真实打开 App 确认。
 - **测试回路已经在 Windows 上实跑一遍**（不再是纸面步骤）：`go build` 出 `memora.exe` → 本机起服务 → 模拟器经 `10.0.2.2` 连上 → `localDebug` 装 APK 操作到报表、待办与更新页。整条链**不需要 Windows 放行规则**——模拟器发起的是宿主机本地连接，不是外部入站。FR-01 至此有了"客户端经内置证书连上服务端"这一半实测；公网那一半也已用 curl 从外部实测通过；手机真机那半 2026-11-26 23:08 由蜂窝网连上，服务端日志可见口令通过。步骤与必填 env 项写在 `android/README.md`。
 - 模拟器侧已探明的前提：本机 WHPX 可用（`emulator -accel-check` 实测），AVD `Medium_Phone_API_37.0` 完整（x86_64 / API 37），不需要新建。
 
@@ -26,7 +26,7 @@
 
 1. 手机真机已连上公网服务端（`serverDebug` 内置证书过得了公网 TLS），还差数据一致性：在手机上新写一条记录，到云端库核它落盘、列表回读一致。**验证**：云库 notes 从 0 变 1，手机显示同一条。
 2. 真模型生成的报表还没看过一次（`MEMORA_LLM_API_KEY` 还是空的，要先填）：本机两轮用的都是 `scripts/stub-llm.py` 假模型，只钉住调用形状、耗时与落库，不证明真实返回读得通。上一条做完就在手机或模拟器上对 `serverDebug` 生成一次。**验证**：正文读得通，`复制全文` 粘出来是完整一段。
-3. 手机上验证 v0.3 更新链：进主屏应出现提醒行 → 更新页显示 0.3 与 notes → 下载 → 系统安装页覆盖安装（不用卸载，同一把钥匙）。**验证**：装完回 App 那一行变成一次性的"刚装好"；若没有提醒，先确认手机装的是 `serverDebug/serverRelease`（同 applicationId、versionCode 2）且能连上服务器。
+3. 手机上验证 v0.4 更新链：进主屏应出现提醒行 → 更新页显示 0.4 与 notes → 下载 → 系统安装页覆盖安装（不用卸载，同一把钥匙）。**验证**：装完回 App 那一行变成一次性的"刚装好"；若没有提醒，先确认手机装的是 `serverDebug/serverRelease`（同 applicationId、versionCode 小于 4）且能连上服务器。
 
 ## 断点说明
 
@@ -35,7 +35,7 @@
 **云机侧的验证口径**（部署那轮实测）：在云机内部连自己的公网地址不通（hairpin 不成），**这不能拿来判断防火墙开没开**，公网那一半只能由手机或 Windows 侧验。bcrypt 哈希过 systemd `EnvironmentFile=` 不变形（`$` 后面只可能是数字，用一次性 `systemd-run` 打进 `printenv` 验过）；unit 里 `EnvironmentFile=` 与 `-config` 双读同一个文件、环境变量优先，而 `MEMORA_LOG_DEBUG` 只走 `os.Getenv`，所以**那一行不能删**。出网实测 `api.deepseek.com` 可达（无 key 回 401，TLS 正常），`api.ipify.org` 不可达——下一条真模型报表有网可用。
 **本机联调回路整条留在盘上，此刻是断开**：`memora.exe`（PID 21972 还在听 8443）、`devlocal/`、`tls-test/` 都在；`app/src/local/res/raw/memora_server_cert.pem` 是仓库那张、不与 `tls-test/server.key` 配对，而模拟器上装的 `com.memora.app.local` 正是拿这张仓库证书编的（最近两轮 `installLocalDebug` 都是），所以那一台现在连不上本机服务。要重新配对就 `cp tls-test/server.crt` 过去重装（证书是编译期打进包的）。
 **冒烟脚本本身在 Windows 上有两道码页坎**（产品没这问题，安卓端 OkHttp 直接发 UTF-8）：Git Bash 会把 curl 的命令行参数按 GBK 转一遍，中文正文和中文口令全失真；Python 的 stdio 同样按 GBK 解，读服务端的 UTF-8 会把汉字后面的引号吃掉。脚本侧已按"载荷走文件 + `PYTHONUTF8=1` + 口令取 ASCII"绕开，别再往回改。
-更新这一轮在模拟器上撞出两个**只有真点才看得见**的错：`canRequestPackageInstalls()` 少个 s（这条编译期就拦住了），以及"我开好了，继续安装"按下去没反应——`install()` 认的入场状态集合里漏了 `NeedsPermission`，界面给了按钮却不接。还有一处是走查时发现的漏网：`Installed` 那一档当时只在更新页里有文案，主屏提醒行返回 null，用户没有任何入口进那页，等于这句永远看不见——现在补成一行一次性的"刚装好"。这一行是靠把 `pending_install_code` 写进偏好文件验出来的（上一轮本机包是 v0.2，版本号没真涨）；v0.3 是真实涨号（2→3）并已上架，等手机安装确认。
+更新这一轮在模拟器上撞出两个**只有真点才看得见**的错：`canRequestPackageInstalls()` 少个 s（这条编译期就拦住了），以及"我开好了，继续安装"按下去没反应——`install()` 认的入场状态集合里漏了 `NeedsPermission`，界面给了按钮却不接。还有一处是走查时发现的漏网：`Installed` 那一档当时只在更新页里有文案，主屏提醒行返回 null，用户没有任何入口进那页，等于这句永远看不见——现在补成一行一次性的"刚装好"。这一行是靠把 `pending_install_code` 写进偏好文件验出来的（上一轮本机包是 v0.2，版本号没真涨）；v0.3 是真实涨号（2→3），之后又发了 v0.4（versionCode 4，含图标与刷新收敛），手机仍等第一次覆盖安装确认。
 
 ## 本轮改动过哪些文档
 
