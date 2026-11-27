@@ -106,7 +106,12 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 	if err != nil {
 		return store.Report{}, err
 	}
-	if len(notes) == 0 && len(tasks) == 0 {
+	// 阶段是第三路素材：它代表"某件事推进了一段"，不是整件事交付（ADR-0030）。
+	stages, err := g.stagesIn(ctx, kind, periodStart)
+	if err != nil {
+		return store.Report{}, err
+	}
+	if len(notes) == 0 && len(tasks) == 0 && len(stages) == 0 {
 		return store.Report{}, ErrNoRecords
 	}
 	// 截止时刻取"读完素材的那一刻"：手动生成未结束的周期时，这就是 design §2
@@ -117,8 +122,8 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 		return store.Report{}, err
 	}
 
-	userPrompt := g.buildUserPrompt(kind, periodStart, periodEnd, notes, tasks)
-	sources := len(notes) + len(tasks)
+	userPrompt := g.buildUserPrompt(kind, periodStart, periodEnd, notes, tasks, stages)
+	sources := len(notes) + len(tasks) + len(stages)
 
 	// 60s 是"这一次生成"的总预算，覆盖所有尝试。每次调用重新计时的话，
 	// "重试一次"实际会变成"最多 120s"，手动生成那个同步请求就等得没道理了。
@@ -155,7 +160,7 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 				return store.Report{}, ferr
 			}
 			g.log.Info("报表生成完成", "kind", string(kind), "period", periodStart,
-				"notes", len(notes), "tasks", len(tasks), "sources", sources)
+				"notes", len(notes), "tasks", len(tasks), "stages", len(stages), "sources", sources)
 			return ready, nil
 		}
 
@@ -211,13 +216,21 @@ func (g *Generator) tasksIn(ctx context.Context, kind Kind, periodStart string) 
 	return g.st.TasksDoneForMonth(ctx, periodStart)
 }
 
+func (g *Generator) stagesIn(ctx context.Context, kind Kind, periodStart string) ([]store.DoneStage, error) {
+	if kind == Week {
+		return g.st.StagesDoneForWeek(ctx, periodStart)
+	}
+	return g.st.StagesDoneForMonth(ctx, periodStart)
+}
+
 // buildUserPrompt 按时间升序列出素材，每行前缀本地日期。给日期是为了让模型分得清
 // "同一件事被记了两次"和"两个不同周期的同名事项"；它不许凭日期编造内容，那条写在提示词里。
 //
-// 两路素材分成两段、各自标出语义，不混成一段流水：记录是"当时想到的"，勾掉的待办是
-// "确实做完了的"。混起来模型就分不开这两件事，而需求 §5 第 4 条要求正文不得出现素材里
-// 没有的事实——来源糊掉之后那条约束连核查的抓手都没有（ADR-0014）。
-func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.Note, tasks []store.Task) string {
+// 三路素材分三段、各自标出语义，不混成一段流水：记录是"当时想到的"，勾掉的待办是
+// "确实做完了的"，勾掉的阶段是"某件事推进了一段"。混起来模型就分不开这三件事，而
+// 需求 §5 第 4 条要求正文不得出现素材里没有的事实——来源糊掉之后那条约束连核查的抓手
+// 都没有（ADR-0014、ADR-0030）。
+func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.Note, tasks []store.Task, stages []store.DoneStage) string {
 	kindName := "周报"
 	if kind == Month {
 		kindName = "月报"
@@ -225,7 +238,7 @@ func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "请生成 %s 覆盖的自然周期：%s 至 %s（含两端，按 %s 的日历）。\n", kindName, start, end, g.loc)
-	b.WriteString("下面两类素材彼此独立：一类是随手记下的想法，一类是在这个周期内勾掉的待办。\n")
+	b.WriteString("下面三类素材彼此独立：随手记下的想法、这个周期内勾掉的待办、以及在这个周期内勾掉的阶段。\n")
 
 	b.WriteString("\n想法记录按时间升序，每行一条，方括号内是记录日期：\n\n")
 	if len(notes) == 0 {
@@ -247,6 +260,19 @@ func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.
 		b.WriteString("\n")
 	}
 
-	fmt.Fprintf(&b, "\n共 %d 条素材：%d 条记录 + %d 条已完成待办。", len(notes)+len(tasks), len(notes), len(tasks))
+	b.WriteString("\n本周期内已勾掉的阶段，按完成时间升序：格式是「父任务 · 阶段名」，写了心得的在后面附上。阶段完成只代表那件事推进了一段，不代表整件事交付：\n\n")
+	if len(stages) == 0 {
+		b.WriteString("（无）\n")
+	}
+	for _, st := range stages {
+		fmt.Fprintf(&b, "[%s] %s · %s", st.DoneAt.In(g.loc).Format("2006-01-02"), st.TaskBody, st.Body)
+		if st.Takeaway != "" {
+			fmt.Fprintf(&b, "（心得：%s）", st.Takeaway)
+		}
+		b.WriteString("\n")
+	}
+
+	fmt.Fprintf(&b, "\n共 %d 条素材：%d 条记录 + %d 条已完成待办 + %d 条已完成阶段。",
+		len(notes)+len(tasks)+len(stages), len(notes), len(tasks), len(stages))
 	return b.String()
 }

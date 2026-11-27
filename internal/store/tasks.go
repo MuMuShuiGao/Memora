@@ -27,6 +27,70 @@ type Task struct {
 	Takeaway  string    `json:"takeaway"`
 	CreatedAt time.Time `json:"created_at"`
 	UpdatedAt time.Time `json:"updated_at"`
+	// Stages 是挂在这条待办下的阶段（ADR-0030），按加入顺序。没挂阶段时是空数组，
+	// 不是 null——客户端不必为"这个字段可能不在"多写一条分支。
+	Stages []Stage `json:"stages"`
+}
+
+// Stage 是待办下面的汇报点（ADR-0030）。它不单独出现在任何列表，也没有 rank；
+// 归属列与 takeaway 的口径和待办一致。
+type Stage struct {
+	ID             int64      `json:"id"`
+	TaskID         int64      `json:"task_id"`
+	Body           string     `json:"body"`
+	Done           bool       `json:"done"`
+	DoneAt         *time.Time `json:"done_at"`
+	DoneWeekStart  string     `json:"done_week_start"`
+	DoneMonthStart string     `json:"done_month_start"`
+	Takeaway       string     `json:"takeaway"`
+	CreatedAt      time.Time  `json:"created_at"`
+	UpdatedAt      time.Time  `json:"updated_at"`
+}
+
+// DoneStage 是报表取数用的阶段：阶段本身加上父任务正文，提示词里要把两者写成一句。
+type DoneStage struct {
+	Stage
+	TaskBody string `json:"task_body"`
+}
+
+// ErrTooManyStages 表示一条待办已经挂满 5 个阶段。api 层先挡，这里是兜底：
+// 上限是产品约束，不能只靠一个客户端守（ADR-0030）。
+var ErrTooManyStages = errors.New("store: 阶段数已达上限")
+
+const maxStagesPerTask = 5
+
+const stageColumns = "id, task_id, body, done, done_at, done_week_start, done_month_start, takeaway, created_at, updated_at"
+
+func scanStage(row interface{ Scan(...any) error }) (Stage, error) {
+	var (
+		st               Stage
+		done             int64
+		doneAt           sql.NullString
+		doneWeek, doneMo sql.NullString
+		createdAt        string
+		updatedAt        string
+	)
+	err := row.Scan(&st.ID, &st.TaskID, &st.Body, &done, &doneAt, &doneWeek, &doneMo, &st.Takeaway, &createdAt, &updatedAt)
+	if err != nil {
+		return st, err
+	}
+	st.Done = done != 0
+	if doneAt.Valid {
+		v, err := decodeTime(doneAt.String)
+		if err != nil {
+			return st, err
+		}
+		st.DoneAt = &v
+	}
+	st.DoneWeekStart = doneWeek.String
+	st.DoneMonthStart = doneMo.String
+	if st.CreatedAt, err = decodeTime(createdAt); err != nil {
+		return st, err
+	}
+	if st.UpdatedAt, err = decodeTime(updatedAt); err != nil {
+		return st, err
+	}
+	return st, nil
 }
 
 // ErrBadOrder 表示 reorder 提交的 id 集合和库里当前的未完成集合对不上。
@@ -82,7 +146,45 @@ func (s *Store) ListTasks(ctx context.Context) ([]Task, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(open, done...), nil
+	all := append(open, done...)
+	if err := s.attachStages(ctx, all); err != nil {
+		return nil, err
+	}
+	return all, nil
+}
+
+// attachStages 一次把全部阶段读出来再按 task_id 分组，避免每条待办发一次查询。
+// 阶段最多是待办数的 5 倍，量级几十条，整表读比拼接 IN 占位更省事。
+func (s *Store) attachStages(ctx context.Context, tasks []Task) error {
+	for i := range tasks {
+		tasks[i].Stages = []Stage{}
+	}
+	if len(tasks) == 0 {
+		return nil
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT "+stageColumns+" FROM task_stages ORDER BY task_id ASC, id ASC")
+	if err != nil {
+		return fmt.Errorf("store: 阶段列表: %w", err)
+	}
+	defer rows.Close()
+
+	byTask := map[int64][]Stage{}
+	for rows.Next() {
+		st, err := scanStage(rows)
+		if err != nil {
+			return fmt.Errorf("store: 读阶段行: %w", err)
+		}
+		byTask[st.TaskID] = append(byTask[st.TaskID], st)
+	}
+	if err := rows.Err(); err != nil {
+		return err
+	}
+	for i := range tasks {
+		if list, ok := byTask[tasks[i].ID]; ok {
+			tasks[i].Stages = list
+		}
+	}
+	return nil
 }
 
 func (s *Store) tasksWhere(ctx context.Context, where, orderBy string, args []any) ([]Task, error) {
@@ -114,7 +216,30 @@ func (s *Store) GetTask(ctx context.Context, id int64) (Task, error) {
 	if err != nil {
 		return Task{}, fmt.Errorf("store: 取待办 %d: %w", id, err)
 	}
+	t.Stages = []Stage{}
+	stages, err := s.stagesOfTask(ctx, id)
+	if err != nil {
+		return Task{}, err
+	}
+	t.Stages = stages
 	return t, nil
+}
+
+func (s *Store) stagesOfTask(ctx context.Context, taskID int64) ([]Stage, error) {
+	rows, err := s.db.QueryContext(ctx, "SELECT "+stageColumns+" FROM task_stages WHERE task_id = ? ORDER BY id ASC", taskID)
+	if err != nil {
+		return nil, fmt.Errorf("store: 取待办 %d 的阶段: %w", taskID, err)
+	}
+	defer rows.Close()
+	out := []Stage{}
+	for rows.Next() {
+		st, err := scanStage(rows)
+		if err != nil {
+			return nil, fmt.Errorf("store: 读待办 %d 的阶段行: %w", taskID, err)
+		}
+		out = append(out, st)
+	}
+	return out, rows.Err()
 }
 
 // CreateTask 新建一条待办并插到队首（ADR-0014 的连带决定：刚想起来的事正因为
@@ -122,7 +247,7 @@ func (s *Store) GetTask(ctx context.Context, id int64) (Task, error) {
 // 两条 rank=1。
 func (s *Store) CreateTask(ctx context.Context, body, dueOn string, now time.Time) (Task, error) {
 	stamp := encodeTime(now.UTC())
-	t := Task{Body: body, Rank: 1, DueOn: dueOn, CreatedAt: now.UTC(), UpdatedAt: now.UTC()}
+	t := Task{Body: body, Rank: 1, DueOn: dueOn, CreatedAt: now.UTC(), UpdatedAt: now.UTC(), Stages: []Stage{}}
 
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE tasks SET rank = rank + 1 WHERE done = 0"); err != nil {
@@ -279,18 +404,28 @@ WHERE id = ?`, stamp, id); err != nil {
 }
 
 // DeleteTask 删一条。删的是未完成项时后面的 rank 由重编收紧，不留空洞。
+// 它的阶段在同一个事务里一起删——阶段没有独立存在的意义（ADR-0030）。
 func (s *Store) DeleteTask(ctx context.Context, id int64, now time.Time) error {
 	cur, err := s.GetTask(ctx, id)
 	if err != nil {
 		return err
 	}
-	if _, err := s.db.ExecContext(ctx, "DELETE FROM tasks WHERE id = ?", id); err != nil {
-		return fmt.Errorf("store: 删待办 %d: %w", id, err)
-	}
-	if cur.Done {
-		return nil
-	}
-	return s.inTx(ctx, func(tx *sql.Tx) error { return resequenceOpen(ctx, tx) })
+	return s.inTx(ctx, func(tx *sql.Tx) error {
+		if _, err := tx.ExecContext(ctx, "DELETE FROM task_stages WHERE task_id = ?", id); err != nil {
+			return fmt.Errorf("store: 删待办 %d 的阶段: %w", id, err)
+		}
+		res, err := tx.ExecContext(ctx, "DELETE FROM tasks WHERE id = ?", id)
+		if err != nil {
+			return fmt.Errorf("store: 删待办 %d: %w", id, err)
+		}
+		if affected, _ := res.RowsAffected(); affected == 0 {
+			return ErrNotFound
+		}
+		if cur.Done {
+			return nil
+		}
+		return resequenceOpen(ctx, tx)
+	})
 }
 
 // ResequenceTasks 按给定顺序把未完成待办的 rank 重写成 1..n。
@@ -392,6 +527,187 @@ func resequenceOpen(ctx context.Context, tx *sql.Tx) error {
 		}
 	}
 	return nil
+}
+
+// GetStage 按 id 取一个阶段。阶段的读写都走它，避免调用方自己拼列。
+func (s *Store) GetStage(ctx context.Context, id int64) (Stage, error) {
+	row := s.db.QueryRowContext(ctx, "SELECT "+stageColumns+" FROM task_stages WHERE id = ?", id)
+	st, err := scanStage(row)
+	if errors.Is(err, sql.ErrNoRows) {
+		return Stage{}, ErrNotFound
+	}
+	if err != nil {
+		return Stage{}, fmt.Errorf("store: 取阶段 %d: %w", id, err)
+	}
+	return st, nil
+}
+
+// CreateStage 往一条待办末尾追加阶段。存在性、上限与插入在同一个事务里：
+// 否则两条并发请求可能一起数到 4 再各插一条，把上限撑破。
+func (s *Store) CreateStage(ctx context.Context, taskID int64, body string, now time.Time) (Stage, error) {
+	stamp := encodeTime(now.UTC())
+	st := Stage{TaskID: taskID, Body: body, CreatedAt: now.UTC(), UpdatedAt: now.UTC()}
+	err := s.inTx(ctx, func(tx *sql.Tx) error {
+		var one int
+		if err := tx.QueryRowContext(ctx, "SELECT 1 FROM tasks WHERE id = ?", taskID).Scan(&one); err != nil {
+			if errors.Is(err, sql.ErrNoRows) {
+				return ErrNotFound
+			}
+			return fmt.Errorf("store: 查待办 %d: %w", taskID, err)
+		}
+		var n int
+		if err := tx.QueryRowContext(ctx, "SELECT COUNT(*) FROM task_stages WHERE task_id = ?", taskID).Scan(&n); err != nil {
+			return fmt.Errorf("store: 数待办 %d 的阶段: %w", taskID, err)
+		}
+		if n >= maxStagesPerTask {
+			return ErrTooManyStages
+		}
+		res, err := tx.ExecContext(ctx,
+			`INSERT INTO task_stages (task_id, body, done, takeaway, created_at, updated_at) VALUES (?, ?, 0, '', ?, ?)`,
+			taskID, body, stamp, stamp)
+		if err != nil {
+			return fmt.Errorf("store: 新建阶段: %w", err)
+		}
+		st.ID, _ = res.LastInsertId()
+		return nil
+	})
+	if err != nil {
+		return Stage{}, err
+	}
+	return st, nil
+}
+
+// UpdateStageBody 只改阶段名，不碰完成态与归属列。
+func (s *Store) UpdateStageBody(ctx context.Context, id int64, body string, now time.Time) (Stage, error) {
+	res, err := s.db.ExecContext(ctx,
+		"UPDATE task_stages SET body = ?, updated_at = ? WHERE id = ?",
+		body, encodeTime(now.UTC()), id)
+	if err != nil {
+		return Stage{}, fmt.Errorf("store: 改阶段 %d: %w", id, err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return Stage{}, ErrNotFound
+	}
+	return s.GetStage(ctx, id)
+}
+
+// UpdateStageTakeaway 只改阶段心得，空串等于清掉（ADR-0027 同规）。
+func (s *Store) UpdateStageTakeaway(ctx context.Context, id int64, takeaway string, now time.Time) (Stage, error) {
+	res, err := s.db.ExecContext(ctx,
+		"UPDATE task_stages SET takeaway = ?, updated_at = ? WHERE id = ?",
+		takeaway, encodeTime(now.UTC()), id)
+	if err != nil {
+		return Stage{}, fmt.Errorf("store: 改阶段心 %d: %w", id, err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return Stage{}, ErrNotFound
+	}
+	return s.GetStage(ctx, id)
+}
+
+// SetStageDone 勾掉或取消勾选一个阶段。归属由勾掉那一刻所在的周/月决定，
+// 与父任务何时记下、何时勾掉都无关（ADR-0030）；取消勾选清归属、保留心得。
+// 阶段没有 rank，所以这里不需要重编任何序列。
+func (s *Store) SetStageDone(ctx context.Context, id int64, done bool, now time.Time, weekStart, monthStart string) (Stage, error) {
+	cur, err := s.GetStage(ctx, id)
+	if err != nil {
+		return Stage{}, err
+	}
+	if cur.Done == done {
+		return cur, nil
+	}
+	stamp := encodeTime(now.UTC())
+	if done {
+		_, err = s.db.ExecContext(ctx, `
+UPDATE task_stages SET done = 1, done_at = ?, done_week_start = ?, done_month_start = ?, updated_at = ?
+WHERE id = ?`, stamp, weekStart, monthStart, stamp, id)
+	} else {
+		_, err = s.db.ExecContext(ctx, `
+UPDATE task_stages SET done = 0, done_at = NULL, done_week_start = NULL, done_month_start = NULL, updated_at = ?
+WHERE id = ?`, stamp, id)
+	}
+	if err != nil {
+		return Stage{}, fmt.Errorf("store: 勾阶段 %d: %w", id, err)
+	}
+	return s.GetStage(ctx, id)
+}
+
+// DeleteStage 删一个阶段。它不占待办名次，所以不触发任何重编号。
+func (s *Store) DeleteStage(ctx context.Context, id int64) error {
+	res, err := s.db.ExecContext(ctx, "DELETE FROM task_stages WHERE id = ?", id)
+	if err != nil {
+		return fmt.Errorf("store: 删阶段 %d: %w", id, err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return ErrNotFound
+	}
+	return nil
+}
+
+// StagesDoneForWeek / Month 是报表第三路素材：阶段带着父任务正文一起出来，
+// 提示词里要写成「父任务 · 阶段名」。按勾掉时刻升序，与另两路一致。
+func (s *Store) StagesDoneForWeek(ctx context.Context, weekStart string) ([]DoneStage, error) {
+	return s.stagesDoneFor(ctx, "s.done_week_start", weekStart)
+}
+
+func (s *Store) StagesDoneForMonth(ctx context.Context, monthStart string) ([]DoneStage, error) {
+	return s.stagesDoneFor(ctx, "s.done_month_start", monthStart)
+}
+
+func (s *Store) stagesDoneFor(ctx context.Context, column, start string) ([]DoneStage, error) {
+	rows, err := s.db.QueryContext(ctx, `
+SELECT s.id, s.task_id, s.body, s.done, s.done_at, s.done_week_start, s.done_month_start,
+	s.takeaway, s.created_at, s.updated_at, t.body
+FROM task_stages s JOIN tasks t ON t.id = s.task_id
+WHERE s.done = 1 AND `+column+` = ? ORDER BY s.done_at ASC, s.id ASC`, start)
+	if err != nil {
+		return nil, fmt.Errorf("store: 阶段素材 (%s): %w", column, err)
+	}
+	defer rows.Close()
+
+	out := []DoneStage{}
+	for rows.Next() {
+		var (
+			ds               DoneStage
+			done             int64
+			doneAt           sql.NullString
+			doneWeek, doneMo sql.NullString
+			createdAt        string
+			updatedAt        string
+		)
+		if err := rows.Scan(&ds.ID, &ds.TaskID, &ds.Body, &done, &doneAt, &doneWeek, &doneMo,
+			&ds.Takeaway, &createdAt, &updatedAt, &ds.TaskBody); err != nil {
+			return nil, fmt.Errorf("store: 读阶段素材行: %w", err)
+		}
+		ds.Done = done != 0
+		if doneAt.Valid {
+			v, err := decodeTime(doneAt.String)
+			if err != nil {
+				return nil, err
+			}
+			ds.DoneAt = &v
+		}
+		ds.DoneWeekStart = doneWeek.String
+		ds.DoneMonthStart = doneMo.String
+		if ds.CreatedAt, err = decodeTime(createdAt); err != nil {
+			return nil, err
+		}
+		if ds.UpdatedAt, err = decodeTime(updatedAt); err != nil {
+			return nil, err
+		}
+		out = append(out, ds)
+	}
+	return out, rows.Err()
+}
+
+// DistinctStageDoneWeekStarts / MonthStarts 给补跑调度当第三路候选来源：
+// 只勾了阶段、一条笔记一条待办都没完成的一周，也该自动出报（FR-05）。
+func (s *Store) DistinctStageDoneWeekStarts(ctx context.Context) ([]string, error) {
+	return s.distinct("SELECT DISTINCT done_week_start FROM task_stages WHERE done = 1 AND done_week_start IS NOT NULL ORDER BY done_week_start DESC", ctx)
+}
+
+func (s *Store) DistinctStageDoneMonthStarts(ctx context.Context) ([]string, error) {
+	return s.distinct("SELECT DISTINCT done_month_start FROM task_stages WHERE done = 1 AND done_month_start IS NOT NULL ORDER BY done_month_start DESC", ctx)
 }
 
 func (s *Store) CountTasks(ctx context.Context) (int64, error) {

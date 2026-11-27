@@ -28,14 +28,14 @@ import java.util.Locale
  * 只查这一次，不轮询、不排后台任务——单人自用，重启的成本低，多一个调度就多一个能坏的地方。
  * 静默安装不做：下载完调起系统安装页，装不装由人在通知里点确认。
  */
-enum class Stage { Idle, Checking, UpToDate, Available, Downloading, Downloaded, NeedsPermission, Installing, Failed, Installed }
+enum class UpdateStage { Idle, Checking, UpToDate, Available, Downloading, Downloaded, NeedsPermission, Installing, Failed, Installed }
 
 class UpdateChecker internal constructor(
     private val context: Context,
     private val api: MemoApi,
     private val scope: CoroutineScope,
 ) {
-    var stage by mutableStateOf(Stage.Idle)
+    var stage by mutableStateOf(UpdateStage.Idle)
         private set
 
     // 服务端 release.json 里的那几项，只在这次会话里有效
@@ -64,15 +64,15 @@ class UpdateChecker internal constructor(
      * 不值得打扰用户（ADR-0015）。Installed 是唯一一句好消息，且只在这一次会话里出现。
      */
     fun check() {
-        if (stage == Stage.Downloading || stage == Stage.Installing) return
+        if (stage == UpdateStage.Downloading || stage == UpdateStage.Installing) return
         scope.launch(Dispatchers.IO) {
-            stage = Stage.Checking
+            stage = UpdateStage.Checking
             error = null
             // 404 在这里不是错误：服务端一次版都没发过。
             val info = try {
                 api.releaseInfo()
             } catch (e: ApiError) {
-                stage = Stage.Failed
+                stage = UpdateStage.Failed
                 error = e.message
                 return@launch
             }
@@ -87,22 +87,22 @@ class UpdateChecker internal constructor(
             sizeBytes = info.size
             downloadedBytes = 0
             percent = -1
-            stage = Stage.Available
+            stage = UpdateStage.Available
         }
     }
 
     /** 这条提醒收起来，服务端再发别的版本时还会提醒 */
     fun skip() {
-        if (stage == Stage.Available || stage == Stage.Failed) {
+        if (stage == UpdateStage.Available || stage == UpdateStage.Failed) {
             prefs.edit().putInt(KEY_SKIPPED, targetCode).apply()
             showCurrent()
         }
     }
 
     fun download() {
-        if (stage != Stage.Available && stage != Stage.Failed) return
+        if (stage != UpdateStage.Available && stage != UpdateStage.Failed) return
         scope.launch(Dispatchers.IO) {
-            stage = Stage.Downloading
+            stage = UpdateStage.Downloading
             percent = -1
             downloadedBytes = 0
             error = null
@@ -117,15 +117,15 @@ class UpdateChecker internal constructor(
                     percent = if (total > 0) ((done * 100) / total).toInt() else -1
                 }
                 if (sizeBytes > 0 && written != sizeBytes) {
-                    stage = Stage.Failed
+                    stage = UpdateStage.Failed
                     error = "下载到 $written 字节，与服务端标的 $sizeBytes 不一致，重下一次"
                     return@launch
                 }
                 percent = 100
-                stage = Stage.Downloaded
+                stage = UpdateStage.Downloaded
             } catch (e: ApiError) {
                 apk.delete()
-                stage = Stage.Failed
+                stage = UpdateStage.Failed
                 error = e.message
             }
         }
@@ -140,12 +140,12 @@ class UpdateChecker internal constructor(
      * 没允许就把人送到那个开关前面（NeedsPermission）。
      */
     fun install() {
-        if (stage !in setOf(Stage.Downloaded, Stage.Installing, Stage.NeedsPermission)) return
+        if (stage !in setOf(UpdateStage.Downloaded, UpdateStage.Installing, UpdateStage.NeedsPermission)) return
         if (context.packageManager.canRequestPackageInstalls()) {
             handOff()
             return
         }
-        stage = Stage.NeedsPermission
+        stage = UpdateStage.NeedsPermission
         context.startActivity(
             Intent(
                 Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
@@ -163,23 +163,23 @@ class UpdateChecker internal constructor(
         }
         // 标记先落盘再跳安装页：装完是全新进程，冷启动那次 check 靠它认出"刚装好"。
         prefs.edit().putInt(KEY_PENDING, targetCode).apply()
-        stage = Stage.Installing
+        stage = UpdateStage.Installing
         context.startActivity(intent)
     }
 
     /** 首屏那一行提醒；没配更新目录、已跳过这一版、正在检查，都回 null */
     fun hintText(): String? = when {
-        stage == Stage.Available && prefs.getInt(KEY_SKIPPED, 0) != targetCode ->
+        stage == UpdateStage.Available && prefs.getInt(KEY_SKIPPED, 0) != targetCode ->
             "有新版 v$versionName（${aboutMb(sizeBytes)}）可更新"
 
-        stage == Stage.Downloading ->
+        stage == UpdateStage.Downloading ->
             "正在下载 v$versionName：" + if (percent >= 0) "$percent%" else aboutMb(downloadedBytes)
 
-        stage == Stage.Downloaded -> "v$versionName 已下载，还差安装这一步"
-        stage == Stage.NeedsPermission -> "系统还没允许 Memora 装应用，点进来开一下"
-        stage == Stage.Installing -> "等系统安装页装 v$versionName"
-        stage == Stage.Installed -> "v$versionName 刚装好"
-        stage == Stage.Failed -> "更新没成：$error"
+        stage == UpdateStage.Downloaded -> "v$versionName 已下载，还差安装这一步"
+        stage == UpdateStage.NeedsPermission -> "系统还没允许 Memora 装应用，点进来开一下"
+        stage == UpdateStage.Installing -> "等系统安装页装 v$versionName"
+        stage == UpdateStage.Installed -> "v$versionName 刚装好"
+        stage == UpdateStage.Failed -> "更新没成：$error"
         else -> null
     }
 
@@ -192,9 +192,9 @@ class UpdateChecker internal constructor(
         if (pending == BuildConfig.VERSION_CODE) {
             prefs.edit().remove(KEY_PENDING).apply()
             versionName = BuildConfig.VERSION_NAME
-            stage = Stage.Installed
+            stage = UpdateStage.Installed
         } else {
-            stage = Stage.UpToDate
+            stage = UpdateStage.UpToDate
         }
     }
 

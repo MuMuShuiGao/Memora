@@ -87,6 +87,23 @@ class MemoApi(private val baseUrl: String) {
         raw("DELETE", "/v1/tasks/$id", null)
     }
 
+    // 阶段（ADR-0030）：加在待办末尾，改字/心得/完成态各发各的字段，删除幂等。
+    suspend fun createStage(taskId: Long, body: String): Stage =
+        sendBody("POST", "/v1/tasks/$taskId/stages", StageCreateRequest(body))
+
+    suspend fun updateStage(
+        id: Long,
+        body: String? = null,
+        takeaway: String? = null,
+    ): Stage = sendBody("PATCH", "/v1/stages/$id", StageUpdateRequest(body, takeaway))
+
+    suspend fun setStageDone(id: Long, done: Boolean): Stage =
+        sendBody("PATCH", "/v1/stages/$id", DoneRequest(done))
+
+    suspend fun deleteStage(id: Long) {
+        raw("DELETE", "/v1/stages/$id", null)
+    }
+
     // 读书（ADR-0029）：读完只记到年月，作者可空。月份由调用方按手机当前年月显式给，
     // 不依赖服务端缺省——和待办的 due_on 同一条理由。
     suspend fun listBooks(): BookList = get("/v1/books")
@@ -293,6 +310,15 @@ class MemoApi(private val baseUrl: String) {
     private data class DoneRequest(val done: Boolean)
 
     @Serializable
+    private data class StageCreateRequest(val body: String)
+
+    @Serializable
+    private data class StageUpdateRequest(
+        val body: String? = null,
+        val takeaway: String? = null,
+    )
+
+    @Serializable
     private data class IdsRequest(val ids: List<Long>)
 
     companion object {
@@ -307,6 +333,10 @@ class MemoApi(private val baseUrl: String) {
         const val MAX_BOOK_TITLE_CHARS = 100
         const val MAX_BOOK_AUTHOR_CHARS = 100
         const val MAX_BOOK_TAKEAWAY_CHARS = 200
+
+        // 阶段名与阶段数的上限（ADR-0030）。服务端同样拦一道，超限回 400。
+        const val MAX_STAGE_BODY_CHARS = 30
+        const val MAX_STAGES_PER_TASK = 5
 
         // 一次拉这么多。服务端的上限就是 200（internal/api/notes.go 的 maxListLimit），
         // 取满它能让"更早的"在绝大多数情况下一次到底。

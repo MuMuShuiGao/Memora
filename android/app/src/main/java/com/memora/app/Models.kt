@@ -31,6 +31,19 @@ data class Task(
     val takeaway: String = "",
     @SerialName("done_at") val doneAt: String? = null,
     @SerialName("done_week_start") val doneWeekStart: String = "",
+    // 阶段（ADR-0030）：随任务一起返回，按加入顺序，最多 5 个。
+    val stages: List<Stage> = emptyList(),
+)
+
+// 阶段是待办下面的汇报点：没有日期、没有名次，勾掉按当周进报表。
+@Serializable
+data class Stage(
+    val id: Long,
+    @SerialName("task_id") val taskId: Long = 0,
+    val body: String = "",
+    val done: Boolean = false,
+    @SerialName("done_at") val doneAt: String? = null,
+    val takeaway: String = "",
 )
 
 @Serializable

@@ -163,28 +163,39 @@ func (s *Scheduler) periodEnded(kind Kind, id string, now time.Time) bool {
 	return !end.After(now)
 }
 
+// finishedPeriods 列出所有"有素材"的周期：记过笔记的、勾掉过待办的、勾掉过阶段的。
+// 只靠第一路会漏掉"这周啥也没记、但勾掉了三件事或两个阶段"那一周——而那一周的报表
+// 恰恰最该自动生成（FR-05 不静默缺失）。三路各自倒序，合并后仍是由新到旧。
 func (s *Scheduler) finishedPeriods(ctx context.Context, kind Kind) ([]string, error) {
-	// 候选来自两路：记过笔记的周期，和勾掉过待办的周期。只靠前者会漏掉"这周啥也没记、
-	// 但勾掉了三件事"那一周——而那一周的报表恰恰最该自动生成（FR-05 不静默缺失）。
-	var fromNotes, fromTasks []string
-	var err error
+	var (
+		fromNotes, fromTasks, fromStages []string
+		err                              error
+	)
 	if kind == Week {
 		fromNotes, err = s.st.DistinctWeekStarts(ctx)
 		if err != nil {
 			return nil, err
 		}
 		fromTasks, err = s.st.DistinctDoneWeekStarts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fromStages, err = s.st.DistinctStageDoneWeekStarts(ctx)
 	} else {
 		fromNotes, err = s.st.DistinctMonthStarts(ctx)
 		if err != nil {
 			return nil, err
 		}
 		fromTasks, err = s.st.DistinctDoneMonthStarts(ctx)
+		if err != nil {
+			return nil, err
+		}
+		fromStages, err = s.st.DistinctStageDoneMonthStarts(ctx)
 	}
 	if err != nil {
 		return nil, err
 	}
-	return mergeDesc(fromNotes, fromTasks), nil
+	return mergeDesc(mergeDesc(fromNotes, fromTasks), fromStages), nil
 }
 
 // mergeDesc 把两段各自倒序的周期 id 合成一段倒序去重的列表。

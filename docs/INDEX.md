@@ -47,9 +47,10 @@
 | [decisions/0027-completion-takeaway.md](decisions/0027-completion-takeaway.md) | 生效中 | 已完成待办可留一句 ≤50 字心得，屏底可跳过提示，不强制；心得进报表素材 |
 | [decisions/0028-left-drawer-navigation.md](decisions/0028-left-drawer-navigation.md) | 生效中 | 五个区块收进左侧抽屉，打开仍直接落待办；撤掉顶部页签行，不引导航库；代价是切区块多一次点击 |
 | [decisions/0029-reading-list.md](decisions/0029-reading-list.md) | 生效中 | `books` 独立成表，字段是书名/作者/读完年月/心得；按年分组翻看，不进周报月报；否掉并入记录、精确到日、只记年份与评分在读 |
+| [decisions/0030-task-stages-as-report-points.md](decisions/0030-task-stages-as-report-points.md) | 生效中 | `tasks` 下挂最多 5 个阶段（一句话 + 一个勾 + 可选 50 字心得）；阶段勾掉即按那一刻进报表，不排日期、不进日历、不占名次、不能嵌套；否掉子任务化、父任务完成时汇总、用记录写进展 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
-| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 四张表的字段与归属算法（待办含安排日期，读书不进报表）、十九个接口的请求响应形状（业务十七 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
-| [design/android-client.md](design/android-client.md) | 生效中 | 手机端九屏划分（抽屉五区块，含日历与读书）、本地只存哪五样、十九个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
+| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 五张表的字段与归属口径（待办可挂阶段、读书不进报表）、二十二个接口的请求响应形状（业务二十 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
+| [design/android-client.md](design/android-client.md) | 生效中 | 手机端九屏划分（抽屉五区块，含日历、读书与待办阶段）、本地只存哪五样、二十二个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
 | [refactor/README.md](refactor/README.md) | 生效中 | 重构专项的收录边界与开工前置条件 |
 | `templates/` | — | 6 份模板：adr / prd / design / refactor / milestone / incident。目录本身无状态，模板自带的 `草案` 是占位提醒 |
 

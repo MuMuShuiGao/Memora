@@ -36,10 +36,12 @@ import androidx.compose.runtime.mutableStateMapOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.listSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.Color
@@ -92,10 +94,22 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     var takeawayId by remember { mutableStateOf<Long?>(null) }
     var takeawayEditing by remember { mutableStateOf(false) }
     var takeawayDraft by remember { mutableStateOf("") }
+    // 同一句心得提示也能指向一个阶段（ADR-0030），两个 id 同时只有一个非空。
+    var takeawayStageId by remember { mutableStateOf<Long?>(null) }
+    // 阶段区（ADR-0030）：展开按待办 id 记住，切区块回来还在；编辑/加入中的输入不落草稿。
+    var stageExpandedIds by rememberSaveable(
+        stateSaver = listSaver<Set<Long>, Long>(save = { it.toList() }, restore = { it.toSet() }),
+    ) { mutableStateOf(emptySet<Long>()) }
+    var stageEditingId by remember { mutableStateOf<Long?>(null) }
+    var stageDraft by remember { mutableStateOf("") }
+    var stageArmedId by remember { mutableStateOf<Long?>(null) }
+    var stageAddingTaskId by remember { mutableStateOf<Long?>(null) }
+    var stageAddDraft by remember { mutableStateOf("") }
+    var stageTogglingIds by remember { mutableStateOf<Set<Long>>(emptySet()) }
 
     val drag = remember { DragState() }
-    // 结构写要让路给还在飞的勾选；勾选本身只锁自己那一行。
-    val structuralEnabled = !busy && togglingIds.isEmpty()
+    // 结构写要让路给还在飞的勾选；勾选本身只锁自己那一行。阶段的勾选同理。
+    val structuralEnabled = !busy && togglingIds.isEmpty() && stageTogglingIds.isEmpty()
 
     LaunchedEffect(reload) {
         loading = true
@@ -201,13 +215,27 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         pickingDate = false
     }
 
+    fun closeStageEdit() {
+        stageEditingId = null
+        stageDraft = ""
+    }
+
+    fun cancelStageAdd() {
+        stageAddingTaskId = null
+        stageAddDraft = ""
+    }
+
     fun startEdit(task: Task) {
         // 结构写进行中不翻编辑；只是别行在勾选时，照常可以点开改字（PATCH 按字段更新）。
         if (busy || task.id in togglingIds || editingId == task.id) return
         // 换一条改时先把上一条落定，否则那段字会随编辑态一起无声消失。
         commitEdit()
+        // 阶段区的输入也属于"上一条"的未保存内容，换条即放弃。
+        closeStageEdit()
+        cancelStageAdd()
         // 手里拿着删除确认又点开正文，说明意图已经换了；不清掉的话下一次点垃圾桶就是真删。
         armedId = null
+        stageArmedId = null
         editingId = task.id
         editDraft = task.body
         editDueOn = task.dueOn
@@ -216,6 +244,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
 
     fun closeTakeaway() {
         takeawayId = null
+        takeawayStageId = null
         takeawayEditing = false
         takeawayDraft = ""
     }
@@ -224,21 +253,74 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         if (busy || task.id in togglingIds) return
         // 换到心得就是换了意图：正文那边的草稿先落定，删除确认作废。
         if (editingId != null) commitEdit()
+        closeStageEdit()
+        cancelStageAdd()
         armedId = null
+        stageArmedId = null
         takeawayId = task.id
+        takeawayStageId = null
         takeawayEditing = true
         takeawayDraft = task.takeaway
+    }
+
+    fun startStageTakeaway(stage: Stage) {
+        if (busy || stage.id in stageTogglingIds) return
+        if (editingId != null) commitEdit()
+        closeStageEdit()
+        armedId = null
+        stageArmedId = null
+        takeawayId = null
+        takeawayStageId = stage.id
+        takeawayEditing = true
+        takeawayDraft = stage.takeaway
     }
 
     fun offerTakeaway(task: Task) {
         // 已经写过的不再问；正在写不打断。跳过、或写完一条之后再勾，下一条照常会问。
         if (task.takeaway.isNotEmpty() || takeawayEditing) return
         takeawayId = task.id
+        takeawayStageId = null
+        takeawayEditing = false
+        takeawayDraft = ""
+    }
+
+    fun offerStageTakeaway(stage: Stage) {
+        if (stage.takeaway.isNotEmpty() || takeawayEditing) return
+        takeawayId = null
+        takeawayStageId = stage.id
         takeawayEditing = false
         takeawayDraft = ""
     }
 
     fun saveTakeaway() {
+        if (takeawayStageId != null) {
+            val stageId = takeawayStageId!!
+            val stage = tasks.firstNotNullOfOrNull { t -> t.stages.firstOrNull { it.id == stageId } }
+            if (stage == null) {
+                closeTakeaway()
+                return
+            }
+            val text = takeawayDraft.trim()
+            closeTakeaway()
+            if (text == stage.takeaway) return
+            tasks = tasks.mapStage(stageId) { it.copy(takeaway = text) }
+            scope.launch {
+                notice = null
+                try {
+                    val got = api.updateStage(stageId, takeaway = text)
+                    tasks = tasks.mapStage(got.id) { it.copy(takeaway = got.takeaway) }
+                } catch (e: ApiError) {
+                    if (e.kind == ApiError.Kind.Unauthorized) {
+                        onUnauthorized()
+                    } else {
+                        tasks = tasks.mapStage(stageId) { it.copy(takeaway = stage.takeaway) }
+                        notice = describe(e)
+                        reload++
+                    }
+                }
+            }
+            return
+        }
         val task = tasks.firstOrNull { it.id == takeawayId } ?: run {
             closeTakeaway()
             return
@@ -261,6 +343,135 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                     notice = describe(e)
                     reload++
                 }
+            }
+        }
+    }
+
+    fun startStageEdit(task: Task, stage: Stage) {
+        // 阶段名的编辑只在待办正文不处于编辑态时开始：两个输入框同时抢焦点没有意义。
+        if (busy || editingId == task.id || stage.id in stageTogglingIds) return
+        armedId = null
+        stageArmedId = null
+        stageEditingId = stage.id
+        stageDraft = stage.body
+    }
+
+    fun commitStageEdit() {
+        val id = stageEditingId ?: return
+        val task = tasks.firstOrNull { t -> t.stages.any { it.id == id } } ?: run {
+            closeStageEdit()
+            return
+        }
+        val original = task.stages.first { it.id == id }
+        val text = stageDraft.trim()
+        closeStageEdit()
+        if (text.isEmpty() || text == original.body) return
+        tasks = tasks.mapStage(id) { it.copy(body = text) }
+        scope.launch {
+            notice = null
+            try {
+                val got = api.updateStage(id, body = text)
+                tasks = tasks.mapStage(id) { it.copy(body = got.body) }
+            } catch (e: ApiError) {
+                if (e.kind == ApiError.Kind.Unauthorized) {
+                    onUnauthorized()
+                } else {
+                    tasks = tasks.mapStage(id) { it.copy(body = original.body) }
+                    notice = describe(e)
+                    reload++
+                }
+            }
+        }
+    }
+
+    fun startStageAdd(task: Task) {
+        if (!structuralEnabled || task.done || task.stages.size >= MemoApi.MAX_STAGES_PER_TASK) return
+        // 加阶段必须看得见阶段区，顺手把它展开。
+        stageExpandedIds = stageExpandedIds + task.id
+        stageAddingTaskId = task.id
+        stageAddDraft = ""
+        stageEditingId = null
+        armedId = null
+        stageArmedId = null
+    }
+
+    fun commitStageAdd(task: Task) {
+        val text = stageAddDraft.trim()
+        if (text.isEmpty()) {
+            cancelStageAdd()
+            return
+        }
+        if (!structuralEnabled) return
+        runWrite {
+            val created = api.createStage(task.id, text)
+            tasks = tasks.map { if (it.id == task.id) it.copy(stages = it.stages + created) else it }
+            cancelStageAdd()
+        }
+    }
+
+    fun removeStage(task: Task, stage: Stage) {
+        if (!structuralEnabled) return
+        if (stageEditingId == stage.id) closeStageEdit()
+        if (takeawayStageId == stage.id) closeTakeaway()
+        val snapshot = tasks
+        stageArmedId = null
+        tasks = tasks.map {
+            if (it.id == task.id) it.copy(stages = it.stages.filterNot { s -> s.id == stage.id }) else it
+        }
+        runWrite {
+            try {
+                api.deleteStage(stage.id)
+            } catch (e: ApiError) {
+                tasks = snapshot
+                throw e
+            }
+        }
+    }
+
+    fun toggleStages(task: Task) {
+        armedId = null
+        stageArmedId = null
+        if (task.id in stageExpandedIds) {
+            if (stageEditingId != null && task.stages.any { it.id == stageEditingId }) closeStageEdit()
+            if (stageAddingTaskId == task.id) cancelStageAdd()
+            stageExpandedIds = stageExpandedIds - task.id
+        } else {
+            stageExpandedIds = stageExpandedIds + task.id
+        }
+    }
+
+    fun toggleStage(task: Task, stage: Stage) {
+        if (busy || stage.id in stageTogglingIds) return
+        armedId = null
+        stageArmedId = null
+        if (stageEditingId == stage.id) commitStageEdit()
+        // 勾阶段同样先改本地再发 PATCH，只锁这一行（ADR-0024 的规矩）。
+        val current = tasks.firstOrNull { it.id == task.id }?.stages?.firstOrNull { it.id == stage.id } ?: return
+        val toDone = !current.done
+        tasks = tasks.mapStage(current.id) { it.copy(done = toDone) }
+        stageTogglingIds = stageTogglingIds + current.id
+        scope.launch {
+            notice = null
+            try {
+                val got = api.setStageDone(current.id, toDone)
+                tasks = tasks.mapStage(got.id) {
+                    it.copy(done = got.done, doneAt = got.doneAt, takeaway = got.takeaway)
+                }
+                if (got.done) {
+                    offerStageTakeaway(got)
+                } else if (takeawayStageId == got.id) {
+                    closeTakeaway()
+                }
+            } catch (e: ApiError) {
+                if (e.kind == ApiError.Kind.Unauthorized) {
+                    onUnauthorized()
+                } else {
+                    tasks = tasks.mapStage(current.id) { it.copy(done = current.done, doneAt = current.doneAt) }
+                    notice = describe(e)
+                    reload++
+                }
+            } finally {
+                stageTogglingIds = stageTogglingIds - current.id
             }
         }
     }
@@ -358,14 +569,22 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     BackHandler(enabled = !pickingDate && editingId == null && armedId == null && takeawayEditing) {
         closeTakeaway()
     }
+    // 阶段名的输入比外层编辑更靠里：返回键先放弃它，再轮到待办正文。
+    BackHandler(enabled = stageEditingId != null || stageAddingTaskId != null) {
+        if (stageEditingId != null) closeStageEdit() else cancelStageAdd()
+    }
 
     val open = tasks.filter { !it.done }
     val done = tasks.filter { it.done }
     val visible = if (expanded) open else open.take(TOP_COUNT)
     // 提示条只认还留在已完成区的那一条：被删掉或取消勾选之后它自动消失。
     val takeawayTask = tasks.firstOrNull { it.id == takeawayId && it.done }
+    val takeawayStage = tasks.firstNotNullOfOrNull { t -> t.stages.firstOrNull { it.id == takeawayStageId } }
     LaunchedEffect(takeawayTask?.id) {
         if (takeawayId != null && takeawayTask == null) closeTakeaway()
+    }
+    LaunchedEffect(takeawayStage?.id) {
+        if (takeawayStageId != null && takeawayStage == null) closeTakeaway()
     }
 
     Column(
@@ -373,9 +592,12 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
             .fillMaxSize()
             // 空白处、标题、发丝线这些没人接的点击也算"点了别处"，撤掉删除确认。
             // 子控件会把各自的点击吃掉，所以这里接到的本来就是剩下那部分。
-            .pointerInput(armedId) {
-                if (armedId == null) return@pointerInput
-                detectTapGestures { armedId = null }
+            .pointerInput(armedId, stageArmedId) {
+                if (armedId == null && stageArmedId == null) return@pointerInput
+                detectTapGestures {
+                    armedId = null
+                    stageArmedId = null
+                }
             },
     ) {
         Row(
@@ -477,6 +699,25 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                         onDelete = { removeTask(task) },
                         onToggle = { toggle(task) },
                         onCommit = { from, to -> commitOrder(from, to) },
+                        stageExpanded = task.id in stageExpandedIds,
+                        stageEditingId = stageEditingId,
+                        stageDraft = stageDraft,
+                        stageArmedId = stageArmedId,
+                        stageAdding = stageAddingTaskId == task.id,
+                        stageAddDraft = stageAddDraft,
+                        stageTogglePending = stageTogglingIds,
+                        onStageToggle = { toggleStage(task, it) },
+                        onStageExpand = { toggleStages(task) },
+                        onStageEditStart = { startStageEdit(task, it) },
+                        onStageEditChange = { stageDraft = clampStageBody(it) },
+                        onStageEditCommit = { commitStageEdit() },
+                        onStageArm = { stageArmedId = it },
+                        onStageClear = { stageArmedId = null },
+                        onStageDelete = { removeStage(task, it) },
+                        onStageAddStart = { startStageAdd(task) },
+                        onStageAddChange = { stageAddDraft = clampStageBody(it) },
+                        onStageAddCommit = { commitStageAdd(task) },
+                        onStageTakeaway = { startStageTakeaway(it) },
                     )
                 }
 
@@ -557,6 +798,25 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                                 onDelete = { removeTask(task) },
                                 onToggle = { toggle(task) },
                                 onCommit = { _, _ -> },
+                                stageExpanded = task.id in stageExpandedIds,
+                                stageEditingId = stageEditingId,
+                                stageDraft = stageDraft,
+                                stageArmedId = stageArmedId,
+                                stageAdding = stageAddingTaskId == task.id,
+                                stageAddDraft = stageAddDraft,
+                                stageTogglePending = stageTogglingIds,
+                                onStageToggle = { toggleStage(task, it) },
+                                onStageExpand = { toggleStages(task) },
+                                onStageEditStart = { startStageEdit(task, it) },
+                                onStageEditChange = { stageDraft = clampStageBody(it) },
+                                onStageEditCommit = { commitStageEdit() },
+                                onStageArm = { stageArmedId = it },
+                                onStageClear = { stageArmedId = null },
+                                onStageDelete = { removeStage(task, it) },
+                                onStageAddStart = { startStageAdd(task) },
+                                onStageAddChange = { stageAddDraft = clampStageBody(it) },
+                                onStageAddCommit = { commitStageAdd(task) },
+                                onStageTakeaway = { startStageTakeaway(it) },
                             )
                         }
                     }
@@ -564,7 +824,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
             }
         }
 
-        takeawayTask?.let { task ->
+        (takeawayStage?.body ?: takeawayTask?.body)?.let { label ->
             Hairline(Modifier.padding(horizontal = 20.dp))
             if (!takeawayEditing) {
                 Row(
@@ -573,12 +833,12 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                 ) {
                     Column(Modifier.weight(1f)) {
                         Text(
-                            "这条做完了，留一句心得？",
+                            if (takeawayStage != null) "这个阶段做完了，留一句心得？" else "这条做完了，留一句心得？",
                             style = MaterialTheme.typography.bodyMedium,
                             color = Ink,
                         )
                         Text(
-                            task.body,
+                            label,
                             style = MaterialTheme.typography.labelSmall,
                             color = InkSoft,
                             maxLines = 1,
@@ -586,11 +846,18 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                         )
                     }
                     TextAction("先不写", onClick = { closeTakeaway() }, color = InkSoft)
-                    TextAction("写一句", onClick = { startTakeaway(task) }, color = Vermilion)
+                    TextAction(
+                        "写一句",
+                        onClick = {
+                            if (takeawayStage != null) startStageTakeaway(takeawayStage)
+                            else takeawayTask?.let { startTakeaway(it) }
+                        },
+                        color = Vermilion,
+                    )
                 }
             } else {
                 val focus = remember { FocusRequester() }
-                LaunchedEffect(task.id) { focus.requestFocus() }
+                LaunchedEffect(label) { focus.requestFocus() }
                 val takeawayChars = takeawayDraft.codePointCount(0, takeawayDraft.length)
                 Column(Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 6.dp)) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -719,6 +986,25 @@ private fun TaskRow(
     onDelete: () -> Unit,
     onToggle: () -> Unit,
     onCommit: (Int, Int) -> Unit,
+    stageExpanded: Boolean,
+    stageEditingId: Long?,
+    stageDraft: String,
+    stageArmedId: Long?,
+    stageAdding: Boolean,
+    stageAddDraft: String,
+    stageTogglePending: Set<Long>,
+    onStageToggle: (Stage) -> Unit,
+    onStageExpand: () -> Unit,
+    onStageEditStart: (Stage) -> Unit,
+    onStageEditChange: (String) -> Unit,
+    onStageEditCommit: () -> Unit,
+    onStageArm: (Long) -> Unit,
+    onStageClear: () -> Unit,
+    onStageDelete: (Stage) -> Unit,
+    onStageAddStart: () -> Unit,
+    onStageAddChange: (String) -> Unit,
+    onStageAddCommit: () -> Unit,
+    onStageTakeaway: (Stage) -> Unit,
 ) {
     val dragging = index >= 0 && drag.index == index
 
@@ -770,6 +1056,15 @@ private fun TaskRow(
                         enabled = enabled,
                         color = if (isOverdue(due, task.done)) Vermilion else InkSoft,
                     )
+                    // 入口只在行内编辑态出现；短待办到此为止，界面上不多任何东西（ADR-0030）。
+                    if (!task.done && task.stages.size < MemoApi.MAX_STAGES_PER_TASK) {
+                        TextAction(
+                            "＋ 加阶段",
+                            onClick = onStageAddStart,
+                            enabled = structuralEnabled,
+                            color = InkSoft,
+                        )
+                    }
                 } else {
                     Text(
                         task.body,
@@ -824,6 +1119,45 @@ private fun TaskRow(
                         )
                     }
                 }
+                if (task.stages.isNotEmpty()) {
+                    // 折叠行只做一件事：展开/收起。它不进正文编辑，也不改任何数据。
+                    val summary = when {
+                        task.done -> "阶段 ${task.stages.count { it.done }}/${task.stages.size}"
+                        task.stages.any { !it.done } -> "下一步：${task.stages.first { !it.done }.body}"
+                        else -> "阶段都完了，可以收尾"
+                    }
+                    Text(
+                        summary,
+                        style = MaterialTheme.typography.labelSmall,
+                        color = InkSoft,
+                        maxLines = 1,
+                        overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.clickable(enabled = enabled && !togglePending, onClick = onStageExpand),
+                    )
+                }
+                if (stageExpanded) {
+                    StageSection(
+                        task = task,
+                        editingId = stageEditingId,
+                        draft = stageDraft,
+                        armedId = stageArmedId,
+                        adding = stageAdding,
+                        addDraft = stageAddDraft,
+                        togglingIds = stageTogglePending,
+                        enabled = enabled,
+                        structuralEnabled = structuralEnabled,
+                        onToggle = onStageToggle,
+                        onEditStart = onStageEditStart,
+                        onDraftChange = onStageEditChange,
+                        onEditCommit = onStageEditCommit,
+                        onArm = onStageArm,
+                        onClear = onStageClear,
+                        onDelete = onStageDelete,
+                        onAddChange = onStageAddChange,
+                        onAddCommit = onStageAddCommit,
+                        onTakeaway = onStageTakeaway,
+                    )
+                }
             }
             if (!editing) {
                 IconAction(
@@ -872,6 +1206,136 @@ private fun TaskRow(
             }
         }
         Hairline(Modifier.padding(horizontal = 20.dp))
+    }
+}
+
+// 阶段区是一段缩进的小注：左侧压一道 1dp 发丝线，行比其他内容再进 24dp（ADR-0030）。
+// 勾掉不清心得、不换位置；心得沿用 TakeawayNote 的朱线与衬线小字。
+@Composable
+private fun StageSection(
+    task: Task,
+    editingId: Long?,
+    draft: String,
+    armedId: Long?,
+    adding: Boolean,
+    addDraft: String,
+    togglingIds: Set<Long>,
+    enabled: Boolean,
+    structuralEnabled: Boolean,
+    onToggle: (Stage) -> Unit,
+    onEditStart: (Stage) -> Unit,
+    onDraftChange: (String) -> Unit,
+    onEditCommit: () -> Unit,
+    onArm: (Long) -> Unit,
+    onClear: () -> Unit,
+    onDelete: (Stage) -> Unit,
+    onAddChange: (String) -> Unit,
+    onAddCommit: () -> Unit,
+    onTakeaway: (Stage) -> Unit,
+) {
+    Column(
+        Modifier
+            .fillMaxWidth()
+            .padding(top = 2.dp)
+            .drawBehind {
+                drawLine(RuleLine, Offset(0f, 0f), Offset(0f, size.height), 1.dp.toPx())
+            }
+            .padding(start = 24.dp, top = 2.dp, bottom = 4.dp),
+    ) {
+        task.stages.forEach { stage ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 1.dp), verticalAlignment = Alignment.Top) {
+                Box(Modifier.align(Alignment.Top)) {
+                    TaskCheckbox(
+                        checked = stage.done,
+                        onToggle = { onToggle(stage) },
+                        enabled = enabled && stage.id !in togglingIds,
+                    )
+                }
+                Spacer(Modifier.width(4.dp))
+                Column(Modifier.weight(1f)) {
+                    if (editingId == stage.id) {
+                        val focus = remember { FocusRequester() }
+                        LaunchedEffect(stage.id) { focus.requestFocus() }
+                        UnderlineField(
+                            value = draft,
+                            onValueChange = onDraftChange,
+                            placeholder = "改阶段名",
+                            focusRequester = focus,
+                            singleLine = true,
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                            onSubmit = onEditCommit,
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                        )
+                        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                            IconAction(
+                                DeskIcon.Delete,
+                                if (armedId == stage.id) "确认删" else "删阶段",
+                                armed = armedId == stage.id,
+                                enabled = structuralEnabled,
+                                color = InkSoft,
+                                onClick = {
+                                    if (armedId == stage.id) {
+                                        onClear()
+                                        onDelete(stage)
+                                    } else {
+                                        onArm(stage.id)
+                                    }
+                                },
+                            )
+                            IconAction(DeskIcon.Check, "保存", enabled = enabled, onClick = onEditCommit)
+                        }
+                    } else {
+                        Text(
+                            stage.body,
+                            style = MaterialTheme.typography.bodyMedium,
+                            color = if (stage.done) InkSoft else Ink,
+                            textDecoration = if (stage.done) TextDecoration.LineThrough else null,
+                            maxLines = 2,
+                            overflow = TextOverflow.Ellipsis,
+                            modifier = Modifier.clickable(enabled = enabled) { onEditStart(stage) },
+                        )
+                    }
+                    if (stage.takeaway.isNotEmpty()) {
+                        TakeawayNote(
+                            text = stage.takeaway,
+                            enabled = enabled,
+                            onClick = { onTakeaway(stage) },
+                        )
+                    } else if (stage.done) {
+                        TextAction(
+                            "补一句",
+                            onClick = { onTakeaway(stage) },
+                            enabled = enabled,
+                            color = InkSoft,
+                        )
+                    }
+                }
+            }
+        }
+        if (adding) {
+            val focus = remember { FocusRequester() }
+            LaunchedEffect(task.id) { focus.requestFocus() }
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                UnderlineField(
+                    value = addDraft,
+                    onValueChange = onAddChange,
+                    placeholder = "阶段名，回车加",
+                    focusRequester = focus,
+                    singleLine = true,
+                    keyboardOptions = KeyboardOptions(imeAction = ImeAction.Done),
+                    onSubmit = onAddCommit,
+                    textStyle = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.weight(1f),
+                )
+                IconAction(
+                    DeskIcon.Check,
+                    "加阶段",
+                    enabled = structuralEnabled && addDraft.isNotBlank(),
+                    onClick = onAddCommit,
+                )
+            }
+        }
+        Hairline(Modifier.padding(top = 2.dp))
     }
 }
 
@@ -1014,3 +1478,15 @@ private fun clampTakeaway(text: String): String {
     if (text.codePointCount(0, text.length) <= MemoApi.MAX_TAKEAWAY_CHARS) return text
     return text.substring(0, text.offsetByCodePoints(0, MemoApi.MAX_TAKEAWAY_CHARS))
 }
+
+private fun clampStageBody(text: String): String {
+    if (text.codePointCount(0, text.length) <= MemoApi.MAX_STAGE_BODY_CHARS) return text
+    return text.substring(0, text.offsetByCodePoints(0, MemoApi.MAX_STAGE_BODY_CHARS))
+}
+
+// 只改命中的那个阶段，其余待办与阶段原样保留。
+private fun List<Task>.mapStage(stageId: Long, transform: (Stage) -> Stage): List<Task> =
+    map { task ->
+        if (task.stages.none { it.id == stageId }) task
+        else task.copy(stages = task.stages.map { if (it.id == stageId) transform(it) else it })
+    }

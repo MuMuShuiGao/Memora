@@ -45,29 +45,29 @@ fun UpdatePage(checker: UpdateChecker, onBack: () -> Unit) {
 
         Column(Modifier.widthIn(max = 640.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             when (checker.stage) {
-                Stage.Idle, Stage.Checking ->
+                UpdateStage.Idle, UpdateStage.Checking ->
                     Line("正在问服务器有没有新版…", InkSoft)
 
-                Stage.UpToDate -> {
+                UpdateStage.UpToDate -> {
                     Headline("已是最新版")
                     Line("本机 v${BuildConfig.VERSION_NAME}，服务器上没有比它更新的版本。")
                     OutlineAction("重新检查", onClick = { checker.check() })
                 }
 
-                Stage.Installed -> {
+                UpdateStage.Installed -> {
                     Headline("刚装好 v${BuildConfig.VERSION_NAME}")
                     Line("这一版是从服务器上拉下来装的，之前那个包已经用不上了。")
                     OutlineAction("再查一次", onClick = { checker.check() })
                 }
 
-                Stage.Available -> {
+                UpdateStage.Available -> {
                     Headline("v${checker.versionName} 可以装")
                     Line("本机 v${BuildConfig.VERSION_NAME} → v${checker.versionName}，约 ${UpdateChecker.aboutMb(checker.sizeBytes)}。")
                     if (checker.notes.isNotBlank()) Line(checker.notes)
                     PrimaryAction("下载", onClick = { checker.download() })
                 }
 
-                Stage.Downloading -> {
+                UpdateStage.Downloading -> {
                     Headline("正在下载 v${checker.versionName}")
                     Bar(checker.percent)
                     Line(
@@ -78,25 +78,25 @@ fun UpdatePage(checker: UpdateChecker, onBack: () -> Unit) {
                     )
                 }
 
-                Stage.Downloaded -> {
+                UpdateStage.Downloaded -> {
                     Headline("包已下好")
                     Line("接下来交给系统的安装页。装完这台手机上的记录与待办不会丢——数据在服务器上，本机只存地址和口令。")
                     PrimaryAction("安装", onClick = { checker.install() })
                 }
 
-                Stage.NeedsPermission -> {
+                UpdateStage.NeedsPermission -> {
                     Headline("要先允许 Memora 装应用")
                     Line("刚才应该已经跳到系统设置那一页：打开“允许安装未知应用”，回来再点一次就行。这个开关按应用记，开一次就一直有效。")
                     OutlineAction("我开好了，继续安装", onClick = { checker.install() })
                 }
 
-                Stage.Installing -> {
+                UpdateStage.Installing -> {
                     Headline("等安装页")
                     Line("在安装页里点“更新”。如果不小心退出来了，可以再叫它一次。")
                     OutlineAction("接着装", onClick = { checker.install() })
                 }
 
-                Stage.Failed -> {
+                UpdateStage.Failed -> {
                     Headline("更新没成")
                     Notice(checker.error ?: "服务端没答上话")
                     OutlineAction("重试", onClick = { checker.check() })
