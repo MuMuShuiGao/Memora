@@ -46,6 +46,7 @@ import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.graphicsLayer
@@ -207,7 +208,7 @@ fun TextAction(
     }
 }
 
-enum class DeskIcon { Add, Refresh, Delete }
+enum class DeskIcon { Add, Refresh, Delete, Prev, Next }
 
 // 按进这块区域的任何地方都先撤掉"等第二次确认"的删除。走 Initial 阶段只看不吃：
 // 输入框的光标、选区与点击照常；挂在外层，因为子控件会把 Main 阶段的点击吃掉。
@@ -254,6 +255,8 @@ fun IconAction(
                 DeskIcon.Add -> addGlyph(tint)
                 DeskIcon.Refresh -> refreshGlyph(tint)
                 DeskIcon.Delete -> deleteGlyph(tint)
+                DeskIcon.Prev -> chevronGlyph(tint, left = true)
+                DeskIcon.Next -> chevronGlyph(tint, left = false)
             }
         }
     }
@@ -296,6 +299,16 @@ private fun DrawScope.refreshGlyph(color: Color) {
         close()
     }
     drawPath(head, color)
+}
+
+// 日历翻月用的尖角，只有两笔，线宽与其它图标一致。
+private fun DrawScope.chevronGlyph(color: Color, left: Boolean) {
+    val s = size.width
+    val w = s * 0.09f
+    val near = if (left) 0.62f else 0.38f
+    val far = if (left) 0.38f else 0.62f
+    drawLine(color, Offset(s * near, s * 0.2f), Offset(s * far, s * 0.5f), w, cap = StrokeCap.Round)
+    drawLine(color, Offset(s * far, s * 0.5f), Offset(s * near, s * 0.8f), w, cap = StrokeCap.Round)
 }
 
 // 盖、提手、上宽下窄的桶身加两道竖纹：轮廓是开口的，跟输入线、发丝线一样只描边。

@@ -92,6 +92,13 @@ func serve(args []string, stdout io.Writer) error {
 		}
 	}()
 
+	// ADR-0021 之前的待办没有安排日期；按创建时刻在服务端时区里的那一天补一次。
+	if n, err := st.BackfillTaskDueOn(context.Background(), cfg.LocalTZ); err != nil {
+		return fmt.Errorf("回填待办安排日期: %w", err)
+	} else if n > 0 {
+		log.Info("历史待办已补上安排日期", "count", n)
+	}
+
 	gate, err := auth.NewGate(cfg.PassphraseHash)
 	if err != nil {
 		return err

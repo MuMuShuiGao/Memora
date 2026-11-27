@@ -38,9 +38,10 @@
 | [decisions/0018-launcher-icon-ink-mark.md](decisions/0018-launcher-icon-ink-mark.md) | 生效中 | 启动图标是一张自适应图标——墨底 `#1B1C18` 上画纸色描边 M，最后一笔收进一枚转了 -3° 的朱色方印；只有 anydpi-v26 那份矢量加单色层，不铺各密度位图 |
 | [decisions/0019-refresh-only-on-reports.md](decisions/0019-refresh-only-on-reports.md) | 生效中 | 三屏各一枚刷新图标收成一枚——只留报表页；记录与待办页靠"进屏即重拉、写失败自动回滚重拉"，跨设备的新内容切走页签再回来才看得见 |
 | [decisions/0020-inline-task-edit.md](decisions/0020-inline-task-edit.md) | 生效中 | 待办正文点开就在这一行里改：回车保存、返回放弃，只发 `{body}`；名次、完成态、勾掉时刻与报表归属都不动 |
+| [decisions/0021-calendar-dated-tasks.md](decisions/0021-calendar-dated-tasks.md) | 生效中 | 待办带安排日期 `due_on`，日历按天看同一批待办，在日历某天加的照样进待办页；不另建日历表，不做提醒、重复、子任务 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
-| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 三张表的字段与归属算法、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
-| [design/android-client.md](design/android-client.md) | 生效中 | 手机端界面划分、本地只存哪五样、十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
+| [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 三张表的字段与归属算法（待办含安排日期）、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
+| [design/android-client.md](design/android-client.md) | 生效中 | 手机端七屏划分（含日历）、本地只存哪五样、十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |
 | [refactor/README.md](refactor/README.md) | 生效中 | 重构专项的收录边界与开工前置条件 |
 | `templates/` | — | 6 份模板：adr / prd / design / refactor / milestone / incident。目录本身无状态，模板自带的 `草案` 是占位提醒 |
 

@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"time"
+
+	"memora/internal/period"
 )
 
 // Task 对应 design §1 的 tasks 表。待办与记录是两类对象（ADR-0014）：
@@ -18,15 +20,17 @@ type Task struct {
 	DoneAt         *time.Time `json:"done_at"`
 	DoneWeekStart  string     `json:"done_week_start"`
 	DoneMonthStart string     `json:"done_month_start"`
-	CreatedAt      time.Time  `json:"created_at"`
-	UpdatedAt      time.Time  `json:"updated_at"`
+	// DueOn 是安排日期（YYYY-MM-DD，服务端本地时区），只决定日历放在哪一格（ADR-0021）。
+	DueOn     string    `json:"due_on"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
 }
 
 // ErrBadOrder 表示 reorder 提交的 id 集合和库里当前的未完成集合对不上。
 // 它是 400 而不是 500：客户端拿的是服务端自己给的列表，对不上只可能是它过期了。
 var ErrBadOrder = errors.New("store: 待办顺序与未完成集合不一致")
 
-const taskColumns = "id, body, done, rank, done_at, done_week_start, done_month_start, created_at, updated_at"
+const taskColumns = "id, body, done, rank, done_at, done_week_start, done_month_start, due_on, created_at, updated_at"
 
 func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 	var (
@@ -37,7 +41,7 @@ func scanTask(row interface{ Scan(...any) error }) (Task, error) {
 		createdAt        string
 		updatedAt        string
 	)
-	err := row.Scan(&t.ID, &t.Body, &done, &t.Rank, &doneAt, &doneWeek, &doneMo, &createdAt, &updatedAt)
+	err := row.Scan(&t.ID, &t.Body, &done, &t.Rank, &doneAt, &doneWeek, &doneMo, &t.DueOn, &createdAt, &updatedAt)
 	if err != nil {
 		return t, err
 	}
@@ -113,17 +117,17 @@ func (s *Store) GetTask(ctx context.Context, id int64) (Task, error) {
 // CreateTask 新建一条待办并插到队首（ADR-0014 的连带决定：刚想起来的事正因为
 // 要先做才会去记，排到队尾等于加完看不见）。整段在一个事务里，否则并发下会出现
 // 两条 rank=1。
-func (s *Store) CreateTask(ctx context.Context, body string, now time.Time) (Task, error) {
+func (s *Store) CreateTask(ctx context.Context, body, dueOn string, now time.Time) (Task, error) {
 	stamp := encodeTime(now.UTC())
-	t := Task{Body: body, Rank: 1, CreatedAt: now.UTC(), UpdatedAt: now.UTC()}
+	t := Task{Body: body, Rank: 1, DueOn: dueOn, CreatedAt: now.UTC(), UpdatedAt: now.UTC()}
 
 	err := s.inTx(ctx, func(tx *sql.Tx) error {
 		if _, err := tx.ExecContext(ctx, "UPDATE tasks SET rank = rank + 1 WHERE done = 0"); err != nil {
 			return fmt.Errorf("store: 待办后移: %w", err)
 		}
 		res, err := tx.ExecContext(ctx,
-			`INSERT INTO tasks (body, done, rank, created_at, updated_at) VALUES (?, 0, ?, ?, ?)`,
-			t.Body, t.Rank, stamp, stamp)
+			`INSERT INTO tasks (body, done, rank, due_on, created_at, updated_at) VALUES (?, 0, ?, ?, ?, ?)`,
+			t.Body, t.Rank, t.DueOn, stamp, stamp)
 		if err != nil {
 			return fmt.Errorf("store: 新建待办: %w", err)
 		}
@@ -148,6 +152,72 @@ func (s *Store) UpdateTaskBody(ctx context.Context, id int64, body string, now t
 		return Task{}, ErrNotFound
 	}
 	return s.GetTask(ctx, id)
+}
+
+// UpdateTaskDueOn 只改安排日期。与改正文一样，不碰 rank、完成态与报表归属列。
+func (s *Store) UpdateTaskDueOn(ctx context.Context, id int64, dueOn string, now time.Time) (Task, error) {
+	res, err := s.db.ExecContext(ctx,
+		"UPDATE tasks SET due_on = ?, updated_at = ? WHERE id = ?",
+		dueOn, encodeTime(now.UTC()), id)
+	if err != nil {
+		return Task{}, fmt.Errorf("store: 改待办日期 %d: %w", id, err)
+	}
+	if affected, _ := res.RowsAffected(); affected == 0 {
+		return Task{}, ErrNotFound
+	}
+	return s.GetTask(ctx, id)
+}
+
+// BackfillTaskDueOn 给 due_on 为空的历史待办补上日期：取创建时刻在 loc 里的那个自然日。
+// 只碰空值、幂等；在启动时调用一次。单列 UPDATE 不需要事务，但统一走 inTx 让失败整体回滚。
+func (s *Store) BackfillTaskDueOn(ctx context.Context, loc *time.Location) (int64, error) {
+	if loc == nil {
+		loc = time.Local
+	}
+	rows, err := s.db.QueryContext(ctx, "SELECT id, created_at FROM tasks WHERE due_on = ''")
+	if err != nil {
+		return 0, fmt.Errorf("store: 列待回填日期: %w", err)
+	}
+	type row struct {
+		id    int64
+		dueOn string
+	}
+	var todo []row
+	for rows.Next() {
+		var id int64
+		var createdAt string
+		if err := rows.Scan(&id, &createdAt); err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("store: 读待回填行: %w", err)
+		}
+		t, err := decodeTime(createdAt)
+		if err != nil {
+			rows.Close()
+			return 0, fmt.Errorf("store: 待办 %d 的创建时间: %w", id, err)
+		}
+		todo = append(todo, row{id: id, dueOn: period.DayID(t, loc)})
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return 0, fmt.Errorf("store: 遍历待回填行: %w", err)
+	}
+	if len(todo) == 0 {
+		return 0, nil
+	}
+
+	err = s.inTx(ctx, func(tx *sql.Tx) error {
+		for _, r := range todo {
+			if _, err := tx.ExecContext(ctx,
+				"UPDATE tasks SET due_on = ? WHERE id = ? AND due_on = ''", r.dueOn, r.id); err != nil {
+				return fmt.Errorf("store: 回填待办 %d 的日期: %w", r.id, err)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, err
+	}
+	return int64(len(todo)), nil
 }
 
 // SetTaskDone 勾掉或取消勾掉一条待办。

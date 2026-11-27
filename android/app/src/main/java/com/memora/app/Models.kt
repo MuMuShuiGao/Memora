@@ -26,6 +26,7 @@ data class Task(
     val body: String,
     val done: Boolean = false,
     val rank: Int = 0,
+    @SerialName("due_on") val dueOn: String = "",
     @SerialName("done_at") val doneAt: String? = null,
     @SerialName("done_week_start") val doneWeekStart: String = "",
 )

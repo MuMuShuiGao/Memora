@@ -236,6 +236,22 @@ check "未完成名次连续无空洞" "1,2,3" "$(tranks)"
 check "超限的待办正文 = 413，不静默截断" 413 "$(code -X POST -H "X-Access-Key: $KEY" -d "$(payload "{\"body\":\"$LONG\"}")" "$BASE/v1/tasks")"
 check "空 PATCH = 400" 400 "$(code -X PATCH -H "X-Access-Key: $KEY" -d '{}' "$BASE/v1/tasks/1")"
 
+# 安排日期（ADR-0021）：显式日期原样回读、坏日期与清空都拒；缺省必须是合法自然日。
+DATED_JSON=$(curl -sk -X POST -H "X-Access-Key: $KEY" -d "$(payload '{"body":"十二月的事","due_on":"2026-12-24"}')" "$BASE/v1/tasks")
+DATED=$(printf '%s' "$DATED_JSON" | jqp "['id']")
+check "带安排日期创建 = 2026-12-24" "2026-12-24" "$(printf '%s' "$DATED_JSON" | jqp "['due_on']")"
+check "PATCH 改安排日期 = 2026-12-25" "2026-12-25" \
+  "$(curl -sk -X PATCH -H "X-Access-Key: $KEY" -d '{"due_on":"2026-12-25"}' "$BASE/v1/tasks/$DATED" | jqp "['due_on']")"
+check "坏安排日期 = 400" 400 "$(code -X POST -H "X-Access-Key: $KEY" -d '{"body":"坏日期","due_on":"2026-02-30"}' "$BASE/v1/tasks")"
+check "清空安排日期 = 400" 400 "$(code -X PATCH -H "X-Access-Key: $KEY" -d '{"due_on":""}' "$BASE/v1/tasks/$DATED")"
+check "缺省的安排日期是合法自然日" "ok" \
+  "$(get "/v1/tasks" | "$PY" -c 'import datetime,json,sys
+try:
+    datetime.date.fromisoformat(json.load(sys.stdin)["tasks"][-1]["due_on"]); print("ok")
+except Exception:
+    print("bad")')"
+check "删掉带日期的临时待办 = 204" 204 "$(code -X DELETE -H "X-Access-Key: $KEY" "$BASE/v1/tasks/$DATED")"
+
 MID=$(tid 1)
 IDS=$(get "/v1/tasks" | "$PY" -c 'import json,sys; print(",".join(str(t["id"]) for t in json.load(sys.stdin)["tasks"] if not t["done"]))')
 STALE=$("$PY" -c "print('[' + ','.join(reversed('$IDS'.split(','))) + ']')")

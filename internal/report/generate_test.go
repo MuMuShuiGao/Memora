@@ -121,7 +121,7 @@ func TestGenerateSuccess(t *testing.T) {
 func seedTask(t *testing.T, st *store.Store, body string, at, doneAt time.Time) store.Task {
 	t.Helper()
 	ctx := context.Background()
-	task, err := st.CreateTask(ctx, body, at)
+	task, err := st.CreateTask(ctx, body, period.DayID(at, plus8), at)
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}

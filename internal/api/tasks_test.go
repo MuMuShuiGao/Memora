@@ -236,7 +236,7 @@ func TestTaskDelete(t *testing.T) {
 func (h *harness) seedTaskDone(t *testing.T, body string, at time.Time) store.Task {
 	t.Helper()
 	ctx := context.Background()
-	task, err := h.st.CreateTask(ctx, body, at)
+	task, err := h.st.CreateTask(ctx, body, period.DayID(at, h.loc), at)
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -294,5 +294,83 @@ func TestEmptyPeriodWithNoTasksStillConflicts(t *testing.T) {
 	res, body := h.do(t, "POST", "/v1/reports/week/2026-11-16/generate", "", true)
 	if res.StatusCode != http.StatusConflict || !strings.Contains(body, "no_records") {
 		t.Errorf("空周期 = %d %s, 期望 409 no_records", res.StatusCode, body)
+	}
+}
+
+func TestTaskDueOnDefaultsToServerLocalToday(t *testing.T) {
+	h := newHarness(t)
+	// 把接口的钟钉在 2026-11-25 10:00（UTC+8），缺省日期必须按这个时区的日历日算。
+	h.api.now = func() time.Time { return time.Date(2026, time.November, 25, 10, 0, 0, 0, testTZ) }
+	got := h.createTask(t, "没写日期的待办")
+	if got.DueOn != "2026-11-25" {
+		t.Errorf("缺省 due_on = %q, 期望 2026-11-25", got.DueOn)
+	}
+}
+
+func TestTaskCreateAndPatchDueOn(t *testing.T) {
+	h := newHarness(t)
+
+	res, raw := h.do(t, "POST", "/v1/tasks", `{"body":"十二月的事","due_on":"2026-12-01"}`, true)
+	if res.StatusCode != http.StatusCreated {
+		t.Fatalf("POST 带日期 = %d %s", res.StatusCode, raw)
+	}
+	var created store.Task
+	if err := json.Unmarshal([]byte(raw), &created); err != nil {
+		t.Fatalf("解析新建待办: %v — %s", err, raw)
+	}
+	if created.DueOn != "2026-12-01" {
+		t.Errorf("创建后的 due_on = %q, 期望 2026-12-01", created.DueOn)
+	}
+
+	res, raw = h.do(t, "PATCH", "/v1/tasks/"+strconv.FormatInt(created.ID, 10), `{"due_on":"2026-12-24"}`, true)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("PATCH due_on = %d %s", res.StatusCode, raw)
+	}
+	var patched store.Task
+	if err := json.Unmarshal([]byte(raw), &patched); err != nil {
+		t.Fatalf("解析改日期结果: %v — %s", err, raw)
+	}
+	if patched.DueOn != "2026-12-24" || patched.Rank != created.Rank || patched.Done != created.Done {
+		t.Errorf("改日期后被牵连: due_on=%q rank=%d done=%v", patched.DueOn, patched.Rank, patched.Done)
+	}
+
+	list := h.listTasks(t)
+	found := false
+	for _, task := range list.Tasks {
+		if task.ID == created.ID {
+			found = true
+			if task.DueOn != "2026-12-24" {
+				t.Errorf("列表里的 due_on = %q, 期望 2026-12-24", task.DueOn)
+			}
+		}
+	}
+	if !found {
+		t.Error("改过日期的待办从列表里消失了")
+	}
+}
+
+func TestTaskDueOnRejectsBadDates(t *testing.T) {
+	h := newHarness(t)
+	created := h.createTask(t, "合法的一条")
+	id := strconv.FormatInt(created.ID, 10)
+
+	for _, bad := range []string{"2026-02-30", "2026-1-2", "2026-13-01", "明天"} {
+		res, raw := h.do(t, "POST", "/v1/tasks", `{"body":"坏日期","due_on":"`+bad+`"}`, true)
+		if res.StatusCode != http.StatusBadRequest || !strings.Contains(raw, "due_on") {
+			t.Errorf("创建 due_on=%q = %d %s, 期望 400 且说明 due_on", bad, res.StatusCode, raw)
+		}
+		res, raw = h.do(t, "PATCH", "/v1/tasks/"+id, `{"due_on":"`+bad+`"}`, true)
+		if res.StatusCode != http.StatusBadRequest || !strings.Contains(raw, "due_on") {
+			t.Errorf("修改 due_on=%q = %d %s, 期望 400 且说明 due_on", bad, res.StatusCode, raw)
+		}
+	}
+
+	// 不能清空：日历没有"未安排"这一格可放它（ADR-0021）。
+	res, raw := h.do(t, "PATCH", "/v1/tasks/"+id, `{"due_on":""}`, true)
+	if res.StatusCode != http.StatusBadRequest {
+		t.Errorf("清空 due_on = %d %s, 期望 400", res.StatusCode, raw)
+	}
+	if again := h.listTasks(t); again.Tasks[0].DueOn != created.DueOn {
+		t.Errorf("被拒的修改动了库里的日期: %q → %q", created.DueOn, again.Tasks[0].DueOn)
 	}
 }

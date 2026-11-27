@@ -100,6 +100,7 @@ CREATE TABLE IF NOT EXISTS tasks (
 	done_at          TEXT,
 	done_week_start  TEXT,
 	done_month_start TEXT,
+	due_on           TEXT    NOT NULL DEFAULT '',
 	created_at       TEXT    NOT NULL,
 	updated_at       TEXT    NOT NULL
 );
@@ -125,6 +126,26 @@ CREATE TABLE IF NOT EXISTS reports (
 `
 	if _, err := s.db.ExecContext(ctx, schema); err != nil {
 		return fmt.Errorf("store: 建表: %w", err)
+	}
+	return s.ensureTaskDueOn(ctx)
+}
+
+// ensureTaskDueOn 给 ADR-0021 之前建的库补上 due_on 列。带非空默认值的 ADD COLUMN
+// 只改元数据，旧行读出来是空串，回填由 BackfillTaskDueOn 按配置时区做。
+// 索引也在这里建：旧库建表语句里的 CREATE INDEX 不能提前引用这一列。
+func (s *Store) ensureTaskDueOn(ctx context.Context) error {
+	var n int
+	if err := s.db.QueryRowContext(ctx,
+		"SELECT COUNT(*) FROM pragma_table_info('tasks') WHERE name = 'due_on'").Scan(&n); err != nil {
+		return fmt.Errorf("store: 查 tasks 列: %w", err)
+	}
+	if n == 0 {
+		if _, err := s.db.ExecContext(ctx, "ALTER TABLE tasks ADD COLUMN due_on TEXT NOT NULL DEFAULT ''"); err != nil {
+			return fmt.Errorf("store: 加 due_on 列: %w", err)
+		}
+	}
+	if _, err := s.db.ExecContext(ctx, "CREATE INDEX IF NOT EXISTS idx_tasks_due ON tasks(due_on)"); err != nil {
+		return fmt.Errorf("store: 建 due_on 索引: %w", err)
 	}
 	return nil
 }

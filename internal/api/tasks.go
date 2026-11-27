@@ -14,9 +14,19 @@ import (
 // reorder 一次提交整列未完成 id。上限按 id 的 JSON 长度估：500 条 * 8 字节远在
 // maxBodyBytes 之内，这条上限守的是"客户端把已完成的也塞进来"那种逻辑错。
 type taskPatch struct {
-	Body *string `json:"body"`
-	Done *bool   `json:"done"`
+	Body  *string `json:"body"`
+	Done  *bool   `json:"done"`
+	DueOn *string `json:"due_on"`
 }
+
+// taskCreate 的 due_on 缺省时落"服务端本地时区的今天"（ADR-0021）：
+// 待办页不选日子也发它自己的当天，这个缺省只照顾旧客户端与 curl。
+type taskCreate struct {
+	Body  string `json:"body"`
+	DueOn string `json:"due_on"`
+}
+
+var errBadDueOn = errors.New("due_on 要 YYYY-MM-DD 的自然日")
 
 type taskIds struct {
 	IDs []int64 `json:"ids"`
@@ -48,17 +58,23 @@ func (s *Server) taskList(w http.ResponseWriter, tasks []store.Task) {
 }
 
 func (s *Server) createTask(w http.ResponseWriter, r *http.Request) {
-	body, ok := s.readBody(w, r)
-	if !ok {
+	var in taskCreate
+	if !s.readJSON(w, r, &in) {
 		return
 	}
+	body := strings.TrimSpace(in.Body)
 	// 长度上限与记录共用一个常量：待办是一句话，超限同样直接拒，不静默截断。
 	if err := s.checkBody(body); err != nil {
 		s.fail(w, statusForBody(err), codeForBody(err), err.Error())
 		return
 	}
+	dueOn, err := s.dueOnOrToday(in.DueOn)
+	if err != nil {
+		s.fail(w, http.StatusBadRequest, "bad_request", err.Error())
+		return
+	}
 
-	task, err := s.st.CreateTask(r.Context(), body, s.now())
+	task, err := s.st.CreateTask(r.Context(), body, dueOn, s.now())
 	if err != nil {
 		s.serverError(w, r, "新建待办", err)
 		return
@@ -77,8 +93,8 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 	if !s.readJSON(w, r, &in) {
 		return
 	}
-	if in.Body == nil && in.Done == nil {
-		s.fail(w, http.StatusBadRequest, "bad_request", `PATCH 要带 {"body":"..."} 或 {"done":true/false}`)
+	if in.Body == nil && in.Done == nil && in.DueOn == nil {
+		s.fail(w, http.StatusBadRequest, "bad_request", `PATCH 要带 {"body":"..."}、{"due_on":"YYYY-MM-DD"} 或 {"done":true/false}`)
 		return
 	}
 
@@ -90,6 +106,22 @@ func (s *Server) updateTask(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		got, err := s.st.UpdateTaskBody(r.Context(), id, body, s.now())
+		if err != nil {
+			s.taskError(w, r, err)
+			return
+		}
+		out = got
+	}
+
+	// 日期只能换到另一个自然日，不接受清空：清空会让这条待办从日历上消失，
+	// 而界面上没有一个"不安排"的状态可以表达它（ADR-0021）。
+	if in.DueOn != nil {
+		day := strings.TrimSpace(*in.DueOn)
+		if !period.IsDayID(day) {
+			s.fail(w, http.StatusBadRequest, "bad_request", "due_on 要 YYYY-MM-DD，且不能清空")
+			return
+		}
+		got, err := s.st.UpdateTaskDueOn(r.Context(), id, day, s.now())
 		if err != nil {
 			s.taskError(w, r, err)
 			return
@@ -154,6 +186,19 @@ func (s *Server) deleteTask(w http.ResponseWriter, r *http.Request) {
 
 func (s *Server) taskID(w http.ResponseWriter, r *http.Request) (int64, bool) {
 	return s.noteID(w, r)
+}
+
+// dueOnOrToday 规范创建请求里的安排日期：空值落服务端本地时区的今天（ADR-0021），
+// 非空必须是带零填充的真实自然日。
+func (s *Server) dueOnOrToday(raw string) (string, error) {
+	day := strings.TrimSpace(raw)
+	if day == "" {
+		return period.DayID(s.now(), s.cfg.LocalTZ), nil
+	}
+	if !period.IsDayID(day) {
+		return "", errBadDueOn
+	}
+	return day, nil
 }
 
 // readJSON 解一个非 noteBody 的请求体。复用 maxBodyBytes 那层防弹，

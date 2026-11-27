@@ -2,7 +2,9 @@ package store
 
 import (
 	"context"
+	"database/sql"
 	"errors"
+	"path/filepath"
 	"testing"
 	"time"
 )
@@ -17,7 +19,7 @@ func seedTasks(t *testing.T, s *Store, ctx context.Context, bodies ...string) []
 	t.Helper()
 	var ids []int64
 	for _, b := range bodies {
-		task, err := s.CreateTask(ctx, b, time.Date(2026, time.November, 24, 9, 0, 0, 0, time.UTC))
+		task, err := s.CreateTask(ctx, b, "2026-11-24", time.Date(2026, time.November, 24, 9, 0, 0, 0, time.UTC))
 		if err != nil {
 			t.Fatalf("CreateTask %q: %v", b, err)
 		}
@@ -50,7 +52,7 @@ func TestCreateTaskGoesToHead(t *testing.T) {
 	ctx := context.Background()
 	now := time.Date(2026, time.November, 24, 9, 0, 0, 0, time.UTC)
 
-	first, err := s.CreateTask(ctx, "写周报", now)
+	first, err := s.CreateTask(ctx, "写周报", "2026-11-24", now)
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -61,7 +63,7 @@ func TestCreateTaskGoesToHead(t *testing.T) {
 		t.Errorf("未勾掉的不该有 done_at: %v", *first.DoneAt)
 	}
 
-	second, err := s.CreateTask(ctx, "约评审", now.Add(time.Minute))
+	second, err := s.CreateTask(ctx, "约评审", "2026-11-25", now.Add(time.Minute))
 	if err != nil {
 		t.Fatalf("CreateTask: %v", err)
 	}
@@ -332,5 +334,109 @@ func TestTasksUpdateBodyKeepsRank(t *testing.T) {
 	}
 	if _, err := s.UpdateTaskBody(ctx, 9999, "不存在", now); !errors.Is(err, ErrNotFound) {
 		t.Errorf("未知 id = %v, 期望 ErrNotFound", err)
+	}
+}
+
+func TestUpdateTaskDueOnKeepsRank(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	now := time.Date(2026, time.November, 24, 9, 0, 0, 0, time.UTC)
+	ids := seedTasks(t, s, ctx, "甲", "乙")
+
+	got, err := s.UpdateTaskDueOn(ctx, ids[1], "2026-12-01", now.Add(time.Hour))
+	if err != nil {
+		t.Fatalf("UpdateTaskDueOn: %v", err)
+	}
+	if got.DueOn != "2026-12-01" || got.Rank != 2 || got.Done {
+		t.Errorf("改日期后 = due_on %q rank %d done %v, 期望 2026-12-01/2/false", got.DueOn, got.Rank, got.Done)
+	}
+	if _, err := s.UpdateTaskDueOn(ctx, 9999, "2026-12-01", now); !errors.Is(err, ErrNotFound) {
+		t.Errorf("未知 id = %v, 期望 ErrNotFound", err)
+	}
+}
+
+func TestBackfillTaskDueOnUsesLocalDay(t *testing.T) {
+	s := openTestStore(t)
+	ctx := context.Background()
+	plus8 := time.FixedZone("UTC+8", 8*3600)
+	// UTC 11-24 23:30 在 UTC+8 已经是 11-25，回填要取本地那一天。
+	at := time.Date(2026, time.November, 24, 23, 30, 0, 0, time.UTC)
+	task, err := s.CreateTask(ctx, "历史待办", "2026-11-24", at)
+	if err != nil {
+		t.Fatalf("CreateTask: %v", err)
+	}
+	if _, err := s.db.ExecContext(ctx, "UPDATE tasks SET due_on = '' WHERE id = ?", task.ID); err != nil {
+		t.Fatalf("抹掉日期: %v", err)
+	}
+
+	n, err := s.BackfillTaskDueOn(ctx, plus8)
+	if err != nil {
+		t.Fatalf("BackfillTaskDueOn: %v", err)
+	}
+	if n != 1 {
+		t.Errorf("回填 %d 条, 期望 1", n)
+	}
+	got, err := s.GetTask(ctx, task.ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.DueOn != "2026-11-25" {
+		t.Errorf("回填后的日期 = %q, 期望 2026-11-25（UTC+8 的本地日）", got.DueOn)
+	}
+	if again, err := s.BackfillTaskDueOn(ctx, plus8); err != nil || again != 0 {
+		t.Errorf("第二次回填 = %d, %v；期望 0, nil（幂等）", again, err)
+	}
+}
+
+// 升级路径：ADR-0021 之前建的库没有 due_on 列，Open 要能补列，回填按创建时刻的本地日。
+func TestOpenAddsDueOnToLegacyTasks(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "legacy.db")
+	raw, err := sql.Open(driverName, "file:"+path)
+	if err != nil {
+		t.Fatalf("sql.Open: %v", err)
+	}
+	const stamp = "2026-11-24T23:30:00Z" // UTC+8 已是 11-25
+	if _, err := raw.Exec(`CREATE TABLE tasks (
+		id INTEGER PRIMARY KEY,
+		body TEXT NOT NULL,
+		done INTEGER NOT NULL DEFAULT 0,
+		rank INTEGER NOT NULL,
+		done_at TEXT,
+		done_week_start TEXT,
+		done_month_start TEXT,
+		created_at TEXT NOT NULL,
+		updated_at TEXT NOT NULL
+	)`); err != nil {
+		t.Fatalf("建旧表: %v", err)
+	}
+	if _, err := raw.Exec(`INSERT INTO tasks (body, done, rank, created_at, updated_at) VALUES ('旧行', 0, 1, ?, ?)`, stamp, stamp); err != nil {
+		t.Fatalf("插旧行: %v", err)
+	}
+	raw.Close()
+
+	s, err := Open(path)
+	if err != nil {
+		t.Fatalf("Open 旧库: %v", err)
+	}
+	t.Cleanup(func() { s.Close() })
+	ctx := context.Background()
+	list, err := s.ListTasks(ctx)
+	if err != nil {
+		t.Fatalf("ListTasks: %v", err)
+	}
+	if len(list) != 1 || list[0].DueOn != "" {
+		t.Fatalf("旧库读完 = %+v, 期望一条且 due_on 为空", list)
+	}
+
+	plus8 := time.FixedZone("UTC+8", 8*3600)
+	if n, err := s.BackfillTaskDueOn(ctx, plus8); err != nil || n != 1 {
+		t.Fatalf("回填 = %d, %v；期望 1, nil", n, err)
+	}
+	got, err := s.GetTask(ctx, list[0].ID)
+	if err != nil {
+		t.Fatalf("GetTask: %v", err)
+	}
+	if got.DueOn != "2026-11-25" {
+		t.Errorf("旧行回填 = %q, 期望 2026-11-25", got.DueOn)
 	}
 }

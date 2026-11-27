@@ -2,8 +2,8 @@
 
 > 状态：生效中
 > 摘要：三张表的字段与归属算法、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)。
-> 更新：2026-11-27（澄清改待办正文只动 `body`：不重编 `rank`、不碰完成态与归属列，ADR-0020；2026-11-26 新增待办：`tasks` 表、五个接口、报表取数纳入本周期完成的待办；同日按 ADR-0015 加更新通道两条接口与 `MEMORA_RELEASE_DIR`）
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)。
+> 更新：2026-11-27（按 ADR-0021 给 `tasks` 加 `due_on` 安排日期，日历与待办页共用这一份；同日早些时候澄清改待办正文只动 `body`（ADR-0020））
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -42,13 +42,16 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `rank` | INTEGER NOT NULL | 未完成序列内的名次，从 1 起连续无空洞 |
 | `done_at` | TEXT | 勾掉的时刻，UTC。未完成时为 NULL，它是报表归属的依据 |
 | `done_week_start` / `done_month_start` | TEXT | ① 同 `notes` 那两列的写法，但算的是**完成那一刻**所在的周/月。未完成时为 NULL |
+| `due_on` | TEXT NOT NULL | 安排日期，服务端本地时区的自然日 `YYYY-MM-DD`。只决定日历把它放在哪一格，与报表归属无关（ADR-0021） |
 | `created_at` / `updated_at` | TEXT NOT NULL | 同 `notes` |
 
-索引：`idx_tasks_open (done, rank)`、`idx_tasks_done (done, done_at DESC)`、`idx_tasks_done_week (done_week_start)`、`idx_tasks_done_month (done_month_start)`。
+索引：`idx_tasks_open (done, rank)`、`idx_tasks_done (done, done_at DESC)`、`idx_tasks_done_week (done_week_start)`、`idx_tasks_done_month (done_month_start)`、`idx_tasks_due (due_on)`。
 
 `rank` 只在 `done = 0` 的集合里有意义，且**凡改到顺序的写操作之后整体重编**：新建排第 1（刚想起来的事正因为要先做才会去记），删除、勾掉、取消勾选、拖拽都走"按给定顺序重编号"这一条路径。改正文例外：`PATCH {body}` 只动 `body` 与 `updated_at`，rank、完成态与归属列原样（[ADR-0020](../decisions/0020-inline-task-edit.md)）。代价是一次拖拽写 N 行，换来的是"前 5 名"这个查询不需要处理并列、空洞、分数耗尽这三种情况——待办量级是几十条（估算），一个事务里重写全部未完成的 rank 毫无压力。
 
 已完成的行保留它勾掉那一刻的 rank 但不再维护，已完成区按 `done_at` 倒序显示。`done = 1` 的行不参与重编号，所以 rank 的连续性约束只覆盖未完成集。
+
+`due_on` 的取值规则：创建时显式给了日期就用它；没给就落服务端本地时区的「今天」。升级前已有的行在启动时按 `created_at` 的本地日期回填一次，回填只碰 `due_on` 为空的行、幂等。日历页拿到的是同一份 `GET /v1/tasks` 全量，按 `due_on` 分天——没有按月的查询接口，也没有第二张表。日期只有自然日，没有时分与提醒。
 
 ### `reports`
 
@@ -109,8 +112,8 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `GET /v1/reports/{kind}/{period_start}` | 取单份 | 未生成返回 404 + `code:"not_generated"` |
 | `POST /v1/reports/{kind}/{period_start}/generate` | 手动生成 | 同步返回结果；失败也要落 `status=failed` |
 | `GET /v1/tasks` | 待办全量 | 无分页：未完成按 `rank` 升序、已完成按 `done_at` 降序，一次返回 `{tasks, open_count, done_count}`。不分页的理由写在下面 §5.1 |
-| `POST /v1/tasks` | 新建 | 请求 `{body}`；响应含 `rank=1`、`done=false`——新建插到队首，其余顺延 |
-| `PATCH /v1/tasks/{id}` | 改 | 接受 `{body}` 与/或 `{done}`；只改 `{body}` 时不重编 rank、不碰完成态与归属列（ADR-0020）；`done` 从 true 改回 false 时清空 `done_at` 并把这条排到未完成队尾 |
+| `POST /v1/tasks` | 新建 | 请求 `{body, due_on?}`；`due_on` 缺省为服务端本地时区的今天，给了必须是 `YYYY-MM-DD`。响应含 `rank=1`、`done=false` 与 `due_on`——新建插到队首，其余顺延 |
+| `PATCH /v1/tasks/{id}` | 改 | 接受 `{body}` 与/或 `{done}` 与/或 `{due_on}`；只改 `{body}` 时不重编 rank、不碰完成态与归属列（ADR-0020）；`due_on` 不能清空，只换到另一个自然日；`done` 从 true 改回 false 时清空 `done_at` 并把这条排到未完成队尾 |
 | `POST /v1/tasks/reorder` | 整列重排 | 请求 `{ids:[已完成拖拽的新顺序]}`，必须是**全部未完成 id 的一个排列**；服务端在一个事务里按数组下标重写 `rank=1..n`，返回重排后的列表。ids 有重复、有未知 id、漏了某条未完成 → 400 `bad_request`，不部分生效 |
 | `DELETE /v1/tasks/{id}` | 删除 | 幂等，已删除返回 404；删的是未完成项时后面的 rank 自动收紧 |
 | `GET /v1/app/release` | 有没有新版可装 | 读 `<MEMORA_RELEASE_DIR>/release.json`，回 `{version_code, version_name, notes, size}`；`size` 由服务端 stat `app.apk` 得到，不是发布时手填的。没配目录或文件不在 → 404 `not_released`；清单在而包不在（发了一半）→ 500 `release_bad` |
@@ -121,6 +124,8 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 待办的界面要"按优先级只露前 5、其余折叠"（FR-09），折叠区一点就要全看到——分两次拉会把"展开"这个动作变成一次网络等待。而待办天然会被勾掉或删除，长期停留在几十条量级（估算），远够不到 `notes` 那个 200 的上限。所以 `GET /v1/tasks` 一次返回全部，服务端另加一个 500 条的安全上限（估算，防的是库里攒了几年的极端情况），超出的已完成项不返回。
 
 `reorder` 走整列提交而不是单条改 rank，是为了让"拖一次"只对应一个请求：单条改动在中途网络失败时会留下一个"客户端显示新顺序、服务端是旧顺序"的分叉，而整列提交失败后客户端本地回滚、再拉一次就和服务端一致了。
+
+日历页也读这份全量列表、在客户端按 `due_on` 分天，因此切页签重拉一次就能看到另一页刚加的那条。按月的服务端过滤留到待办量真的超过 500 条安全上限时再做（ADR-0021 的复查条件）。
 
 `body` 长度上限先按 2000 字符定（需求 §6 待定项之一，客户端和服务端同用一个常量配置）。超限返回 413 而不是静默截断。
 

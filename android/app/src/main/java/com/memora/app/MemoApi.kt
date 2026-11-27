@@ -2,6 +2,7 @@ package com.memora.app
 
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
@@ -62,7 +63,10 @@ class MemoApi(private val baseUrl: String) {
     // 调序一次提交整列 id，不发单条 rank——半截顺序比失败更难收拾。
     suspend fun listTasks(): TaskList = get("/v1/tasks")
 
-    suspend fun createTask(body: String): Task = post("/v1/tasks", body)
+    // 日期由调用方按手机那一天显式给（ADR-0021）：不依赖服务端缺省，免得两边时区不同时
+    // 同一条待办在日历上落到另一天。
+    suspend fun createTask(body: String, dueOn: String): Task =
+        sendBody("POST", "/v1/tasks", TaskCreateRequest(body, dueOn))
 
     suspend fun updateTaskBody(id: Long, body: String): Task = patch("/v1/tasks/$id", body)
 
@@ -228,6 +232,9 @@ class MemoApi(private val baseUrl: String) {
 
     @Serializable
     private data class BodyRequest(val body: String)
+
+    @Serializable
+    private data class TaskCreateRequest(val body: String, @SerialName("due_on") val dueOn: String)
 
     @Serializable
     private data class DoneRequest(val done: Boolean)

@@ -113,7 +113,7 @@ fun TasksScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         if (text.isEmpty() || busy) return
         armedId = null
         runWrite {
-            val created = api.createTask(text)
+            val created = api.createTask(text, today().toString())
             // 新建插队首，其余顺延（ADR-0014 的连带决定）。位置就是顺序，rank 由服务端重编。
             tasks = listOf(created) + tasks.filter { !it.done } + tasks.filter { it.done }
             draft = ""
@@ -499,6 +499,15 @@ private fun TaskRow(
                             color = InkSoft,
                         )
                     }
+                    // 安排日期不是今天才写出来：今天的条目已经站在今天这一屏里，
+                    // 再印一遍日期只是噪音。
+                    if (task.dueOn.isNotEmpty() && task.dueOn != today().toString()) {
+                        Text(
+                            "安排 · ${dueText(task.dueOn)}",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = InkSoft,
+                        )
+                    }
                 }
             }
             if (!editing) {
@@ -547,7 +556,7 @@ private fun TaskRow(
 // 18dp 空心方框，勾上填墨色再压一道纸色对勾。不用 Material 的 Checkbox：它的圆角底
 // 和水波纹跟这片纸不搭（ADR-0013）。对勾是画出来的，不是字符——换字体字符会变成方框。
 @Composable
-private fun TaskCheckbox(checked: Boolean, onToggle: () -> Unit, enabled: Boolean) {
+fun TaskCheckbox(checked: Boolean, onToggle: () -> Unit, enabled: Boolean) {
     Box(
         Modifier
             .size(18.dp)

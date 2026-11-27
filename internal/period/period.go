@@ -31,6 +31,18 @@ func MonthStartID(t time.Time, loc *time.Location) string {
 	return formatDate(time.Date(y, m, 1, 0, 0, 0, 0, loc))
 }
 
+// DayID 返回 t 在 loc 里的那个自然日，格式 YYYY-MM-DD。待办的安排日期用它
+// （ADR-0021）：只到天，不带时分，也不做时区换算以外的解释。
+func DayID(t time.Time, loc *time.Location) string {
+	return t.In(loc).Format(dateLayout)
+}
+
+// IsDayID 只认带零填充的 YYYY-MM-DD，且必须是真实存在的日期（2 月 30 日不算）。
+func IsDayID(s string) bool {
+	t, err := time.Parse(dateLayout, s)
+	return err == nil && formatDate(t) == s
+}
+
 // WeekRange 把 WeekStartID 的结果还原成 [周一 00:00, 下周一 00:00) 的半开区间。
 // 用半开而不是 23:59:59，是为了不让最后一秒内的毫秒级记录漏掉。
 func WeekRange(startID string, loc *time.Location) (start, end time.Time, err error) {
