@@ -17,6 +17,7 @@ import (
 
 	"memora/internal/api"
 	"memora/internal/auth"
+	"memora/internal/backup"
 	"memora/internal/config"
 	"memora/internal/report"
 	"memora/internal/store"
@@ -126,6 +127,13 @@ func serve(args []string, stdout io.Writer) error {
 	// 所以错过某个时刻不影响结果，起来就能补上。
 	sched := report.NewScheduler(gen, st, cfg.LocalTZ, log)
 	go sched.Run(ctx)
+
+	// 备份同走进程内调度（ADR-0025）；没配目录就明说，别让"以为有备份"变成静默。
+	if cfg.BackupDir == "" {
+		log.Warn("未配置备份目录，数据库没有每日快照")
+	} else {
+		go backup.New(st, cfg.BackupDir, cfg.BackupKeep, log).Run(ctx)
+	}
 
 	n, err := st.CountNotes(ctx)
 	if err != nil {

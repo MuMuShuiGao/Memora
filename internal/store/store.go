@@ -59,6 +59,16 @@ func Open(path string) (*Store, error) {
 
 func (s *Store) Close() error { return s.db.Close() }
 
+// SnapshotTo 用 VACUUM INTO 导出一份一致的快照（ADR-0025）。WAL 下运行中直接
+// 复制库文件会漏掉还没 checkpoint 的提交，VACUUM INTO 在读事务里拿到同一时刻
+// 的完整数据。目标文件必须不存在，调用方负责清掉上次的残留。
+func (s *Store) SnapshotTo(ctx context.Context, path string) error {
+	if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", path); err != nil {
+		return fmt.Errorf("store: 快照到 %s: %w", path, err)
+	}
+	return nil
+}
+
 // inTx 跑一个必须整体成败的写事务。待办的 rank 是"整个未完成集合"的属性——新建要顺延、
 // 勾掉要收紧——单条语句表达不了，又不允许出现"顺延了一半"的中间状态。
 // Store 只开一条连接（见 Open），所以这里不需要考虑并发事务。

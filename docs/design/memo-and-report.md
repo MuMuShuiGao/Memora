@@ -2,8 +2,8 @@
 
 > 状态：生效中
 > 摘要：三张表的字段与归属算法、十五个接口的请求响应形状（业务十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)。
-> 更新：2026-11-27（按 ADR-0021 给 `tasks` 加 `due_on` 安排日期，日历与待办页共用这一份；同日早些时候澄清改待办正文只动 `body`（ADR-0020））
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)、[0025](../decisions/0025-backup-snapshot-and-offsite-pull.md)、[0026](../decisions/0026-manual-offsite-pull.md)。
+> 更新：2026-11-27（新增 §8 备份与恢复按 ADR-0025、盘外副本改手动按 ADR-0026；§9 本设计不包含顺延；按 ADR-0021 给 `tasks` 加 `due_on` 安排日期，日历与待办页共用这一份；同日早些时候澄清改待办正文只动 `body`（ADR-0020））
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -158,6 +158,13 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 一轮扫描里每种报表最多补最近六份，其余留到下一轮。理由是：关机几个月后重启，候选可能有几十周，一次全打完会把重启后的头几分钟全占在排队等模型上（推断，未实测）。候选按周期由新到旧排，所以先拿到的是最近的。
 
-## 8. 本设计不包含
+## 8. 备份与恢复
 
-备份机制（谁定期拷走库文件）——尚无结论，见 NOW 待确认。安卓端界面细节与包结构在 [android-client.md](android-client.md)（接口定完后已单独成篇）。
+- **每日快照**：`serve` 启动时与之后每小时检查一次，距最新一份满 24 小时就用 `VACUUM INTO` 导出一份到 `MEMORA_BACKUP_DIR`，文件名 `memora-<UTC时间戳>.db`，只保留最近 `MEMORA_BACKUP_KEEP` 份（默认 5）。WAL 下运行中不能直接复制库文件（会漏 `-wal` 里的提交），理由与备选方案见 [ADR-0026](../decisions/0026-manual-offsite-pull.md)（服务器部分承自 ADR-0025）。
+- **盘外副本**：手动双击本机入口脚本执行 `deploy/pull-backups.ps1`，scp 拉回本机，本机保留最近 5 份；不注册计划任务（ADR-0026），忘拉就落后。
+- **恢复**：停 `memora.service`，把选定的快照覆盖回 `MEMORA_DB_PATH`，删掉同目录残留的 `-wal`/`-shm`，再起服务；恢复后核对记录与报表达数。
+- **不进自动快照**：`/etc/memora/memora.env`（口令哈希、模型 key）与 TLS 私钥不每天复制，装机时各另存一份到本机；证书重签会让已装 APK 的证书固定失效（ADR-0009），私钥丢了要连带重发 APK。
+
+## 9. 本设计不包含
+
+安卓端界面细节与包结构在 [android-client.md](android-client.md)（接口定完后已单独成篇）。

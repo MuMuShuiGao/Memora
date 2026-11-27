@@ -30,6 +30,11 @@ type Config struct {
 	// 缺了不影响别的接口，只是 /v1/app/release 一律回 404。
 	ReleaseDir string
 
+	// 备份目录（ADR-0025）：serve 每天导出一份 VACUUM INTO 快照，保留最近 BackupKeep 份。
+	// 目录为空则不备份——本机开发不需要每次留副本。
+	BackupDir  string
+	BackupKeep int
+
 	// 以下三项在报表切片落地前不参与校验，缺了不影响记录读写。
 	DeepSeekBaseURL string
 	DeepSeekModel   string
@@ -78,6 +83,9 @@ func Load(path string) (*Config, error) {
 	if c.MaxNoteChars == 0 {
 		c.MaxNoteChars = 2000
 	}
+	if c.BackupKeep == 0 {
+		c.BackupKeep = 5
+	}
 	return c, nil
 }
 
@@ -101,7 +109,16 @@ var envKeys = map[string]binding{
 		c.MaxNoteChars = n
 		return nil
 	}},
-	"MEMORA_RELEASE_DIR":  {false, func(c *Config, v string) error { c.ReleaseDir = v; return nil }},
+	"MEMORA_RELEASE_DIR": {false, func(c *Config, v string) error { c.ReleaseDir = v; return nil }},
+	"MEMORA_BACKUP_DIR":  {false, func(c *Config, v string) error { c.BackupDir = v; return nil }},
+	"MEMORA_BACKUP_KEEP": {false, func(c *Config, v string) error {
+		n, err := strconv.Atoi(v)
+		if err != nil || n <= 0 {
+			return fmt.Errorf("要正整数，实得 %q", v)
+		}
+		c.BackupKeep = n
+		return nil
+	}},
 	"MEMORA_LLM_BASE_URL": {false, func(c *Config, v string) error { c.DeepSeekBaseURL = v; return nil }},
 	"MEMORA_LLM_MODEL":    {false, func(c *Config, v string) error { c.DeepSeekModel = v; return nil }},
 	"MEMORA_LLM_API_KEY":  {false, func(c *Config, v string) error { c.DeepSeekAPIKey = v; return nil }},
