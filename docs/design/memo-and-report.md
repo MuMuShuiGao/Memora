@@ -117,7 +117,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `POST /v1/tasks/reorder` | 整列重排 | 请求 `{ids:[已完成拖拽的新顺序]}`，必须是**全部未完成 id 的一个排列**；服务端在一个事务里按数组下标重写 `rank=1..n`，返回重排后的列表。ids 有重复、有未知 id、漏了某条未完成 → 400 `bad_request`，不部分生效 |
 | `DELETE /v1/tasks/{id}` | 删除 | 幂等，已删除返回 404；删的是未完成项时后面的 rank 自动收紧 |
 | `GET /v1/app/release` | 有没有新版可装 | 读 `<MEMORA_RELEASE_DIR>/release.json`，回 `{version_code, version_name, notes, size}`；`size` 由服务端 stat `app.apk` 得到，不是发布时手填的。没配目录或文件不在 → 404 `not_released`；清单在而包不在（发了一半）→ 500 `release_bad` |
-| `GET /v1/app/release/file` | 拉 APK 本体 | `application/vnd.android.package-archive`，走 `http.ServeContent`，因此带 `Accept-Ranges`。文件缺失同样 404 `not_released`。服务端支持续传，客户端目前断了从头重下——10 MB 量级下那段偏移状态机不值（见 [android-client.md](android-client.md) §边界与异常） |
+| `GET /v1/app/release/file` | 拉 APK 本体 | `application/vnd.android.package-archive`，走 `http.ServeContent`，因此带 `Accept-Ranges`；这条响应单独把 HTTP/2 单流写期限放宽到十分钟，避免慢网在一分钟被 `RST_STREAM` 掐断（[ADR-0022](../decisions/0022-download-write-deadline.md)）。文件缺失同样 404 `not_released`。服务端支持续传，客户端目前断了从头重下——10 MB 量级下那段偏移状态机不值（见 [android-client.md](android-client.md) §边界与异常） |
 
 #### 5.1 待办为什么一次给全量
 

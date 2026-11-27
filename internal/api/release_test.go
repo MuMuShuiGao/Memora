@@ -1,13 +1,16 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 // 更新分发（ADR-0015）。发版动作是"往一个目录里拷两个文件"，所以这里钉的是
@@ -117,6 +120,57 @@ func TestReleaseInfoAndDownload(t *testing.T) {
 	}
 	if body != "APKBYTES-0123456789" {
 		t.Errorf("正文 = %q", body)
+	}
+}
+
+// 慢速拉包必须能拉到尾。HTTP/2 会把全局 WriteTimeout 当成单条流的写期限，
+// 真机上十兆的包走蜂窝网整一分钟就被 RST_STREAM(INTERNAL_ERROR) 掐断（OkHttp
+// 报 "stream was reset: INTERNAL_ERROR"）。这里把写超时压到 300ms、客户端开头
+// 一秒只读六十来 KB，让服务端在流控窗口满后卡住，复现当时的处境。
+func TestReleaseDownloadSurvivesSlowClient(t *testing.T) {
+	h := newHarness(t)
+	// 客户端默认给单条流 4MB 窗口，包得比它大，服务端才会真卡在写上。
+	payload := bytes.Repeat([]byte("x"), 5<<20)
+	h.api.cfg.ReleaseDir = writeReleaseDir(t, `{"version_code":2}`, payload)
+
+	ts := httptest.NewUnstartedServer(h.api.Handler())
+	ts.EnableHTTP2 = true
+	ts.Config.WriteTimeout = 300 * time.Millisecond
+	ts.StartTLS()
+	defer ts.Close()
+
+	req, err := http.NewRequest("GET", ts.URL+"/v1/app/release/file", nil)
+	if err != nil {
+		t.Fatalf("NewRequest: %v", err)
+	}
+	req.Header.Set("X-Access-Key", testPass)
+	res, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer res.Body.Close()
+	if res.ProtoMajor != 2 {
+		t.Fatalf("这条要走在 HTTP/2 上才测得到，实得 %s", res.Proto)
+	}
+
+	buf := make([]byte, 2048)
+	got := 0
+	start := time.Now()
+	for {
+		n, rerr := res.Body.Read(buf)
+		got += n
+		if rerr == io.EOF {
+			break
+		}
+		if rerr != nil {
+			t.Fatalf("读了 %d 字节后被掐断: %v", got, rerr)
+		}
+		if time.Since(start) < time.Second {
+			time.Sleep(30 * time.Millisecond)
+		}
+	}
+	if got != len(payload) {
+		t.Errorf("收到 %d 字节，要 %d", got, len(payload))
 	}
 }
 

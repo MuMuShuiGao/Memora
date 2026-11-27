@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"time"
 )
 
 // 更新分发（ADR-0015）：把服务端一个目录里的 release.json 与 app.apk 只读地暴露出去。
@@ -70,6 +71,10 @@ func (s *Server) downloadRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Header().Set("Content-Type", apkContentType)
+	// HTTP/2 把 Server.WriteTimeout（60 秒）当成本条流的写期限：手机在蜂窝网
+	// 上拉十兆的包，超过一分钟就收到 RST_STREAM(INTERNAL_ERROR)（真机实测
+	// 两次都是整 60 秒断的）。下载单独放宽到十分钟，其余接口仍受全局约束。
+	_ = http.NewResponseController(w).SetWriteDeadline(time.Now().Add(10 * time.Minute))
 	http.ServeContent(w, r, releaseAPKName, fi.ModTime(), f)
 }
 

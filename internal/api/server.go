@@ -132,6 +132,12 @@ func (r *statusRecorder) WriteHeader(code int) {
 	r.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap 让 http.ResponseController 穿过这层日志包装：下载接口要单独放宽
+// 写期限，少了这个方法 SetWriteDeadline 只会静默返回 not supported（ADR-0022）。
+func (r *statusRecorder) Unwrap() http.ResponseWriter {
+	return r.ResponseWriter
+}
+
 func remoteHost(r *http.Request) string {
 	if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil {
 		return host
