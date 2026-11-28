@@ -1,9 +1,9 @@
 # 设计：记录、待办与报表的数据、接口与传输
 
 > 状态：生效中
-> 摘要：五张表的字段与归属口径（待办可挂阶段、读书不进报表）、二十二个接口的请求响应形状（业务二十 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)、[0025](../decisions/0025-backup-snapshot-and-offsite-pull.md)、[0026](../decisions/0026-manual-offsite-pull.md)、[0027](../decisions/0027-completion-takeaway.md)、[0029](../decisions/0029-reading-list.md)、[0030](../decisions/0030-task-stages-as-report-points.md)。
-> 更新：2026-11-28（新增 §1 `task_stages` 表与 §5 三个阶段接口，阶段完成进报表素材，按 ADR-0030；同日新增 §1 `books` 表与 §5 四个读书接口，读书不进周报月报素材，按 ADR-0029；此前 2026-11-27 新增 §8 备份与恢复按 ADR-0025、盘外副本改手动按 ADR-0026，按 ADR-0021 给 `tasks` 加 `due_on`，按 ADR-0027 给待办加完成心得 `takeaway`）
+> 摘要：六张表的字段与归属口径（待办可挂阶段、日报手写进素材、读书不进报表）、二十四个接口的请求响应形状（业务二十二 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)、[0025](../decisions/0025-backup-snapshot-and-offsite-pull.md)、[0026](../decisions/0026-manual-offsite-pull.md)、[0027](../decisions/0027-completion-takeaway.md)、[0029](../decisions/0029-reading-list.md)、[0030](../decisions/0030-task-stages-as-report-points.md)、[0031](../decisions/0031-handwritten-daily-as-report-material.md)。
+> 更新：2026-11-28（新增 §1 `dailies` 表与 §5 两个日报接口，日报按日期进周报月报第四路素材，按 ADR-0031；同日新增 §1 `task_stages` 表与 §5 三个阶段接口，阶段完成进报表素材，按 ADR-0030；同日新增 §1 `books` 表与 §5 四个读书接口，读书不进周报月报素材，按 ADR-0029；此前 2026-11-27 新增 §8 备份与恢复按 ADR-0025、盘外副本改手动按 ADR-0026，按 ADR-0021 给 `tasks` 加 `due_on`，按 ADR-0027 给待办加完成心得 `takeaway`）
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -90,6 +90,21 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 `books` **不参与报表归属**：读完一本书不是一份工作交付，书单不进周报月报素材（§6），`week_start` / `month_start` 那套冗余列在这里没有对应物。备份快照用 `VACUUM INTO` 导整库，`books` 自动包含在内，不增加运维动作。
 
+### `dailies`
+
+日报是第四类业务对象（[ADR-0031](../decisions/0031-handwritten-daily-as-report-material.md)）：记录是白天的碎片、待办带完成态与顺序、书只有读完年月，日报是**本人按自然日手写的总结**。它不由模型生成，不落 `reports` 表。
+
+| 列 | 类型 | 说明 |
+| --- | --- | --- |
+| `id` | INTEGER PRIMARY KEY | 自增 |
+| `entry_day` | TEXT NOT NULL UNIQUE | 日报所属的自然日 `YYYY-MM-DD`，服务端本地时区，与 `due_on` 同口径。**归属周/月只看它**，与创建、修改时刻无关 |
+| `priorities` | TEXT NOT NULL DEFAULT '' | 优先级，本人写或从待办前五抄入的一段文本；它是计划，不代表完成 |
+| `done` | TEXT NOT NULL DEFAULT '' | 今天做成了什么，本人写或从当天勾掉的待办/阶段抄入 |
+| `risk` | TEXT NOT NULL DEFAULT '' | 卡点与没做完的，可空 |
+| `created_at` / `updated_at` | TEXT NOT NULL | 同 `notes` |
+
+`entry_day` 上的 UNIQUE 就是“一天一条”：写同一天是覆盖，不产生第二条。三节全为空的行不参与素材、不触发补跑、也不算“这天有日报”；不另设删除接口，保存全空即等于清掉。日报不引用待办 id，优先级抄进来就是普通文本——待办改名、删除、重排都不会回头改日报，快照语义与报表一致。
+
 ### `reports`
 
 | 列 | 类型 | 说明 |
@@ -99,7 +114,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `period_start` / `period_end` | TEXT NOT NULL | 自然周期的起止日，**主键语义在这对上** |
 | `status` | TEXT NOT NULL | ③ `pending` \| `running` \| `ready` \| `failed` |
 | `body` | TEXT | 模型返回的正文，`status != ready` 时为 NULL |
-| `source_count` | INTEGER | 依据多少条素材（记录 + 待办 + 阶段，FR-08） |
+| `source_count` | INTEGER | 依据多少条素材（记录 + 待办 + 阶段 + 日报，FR-08） |
 | `fail_reason` | TEXT | 人可读的失败原因，仅 `failed` 时有值 |
 | `generated_at` | TEXT | 生成完成或失败的时刻，UTC |
 | `created_at` / `updated_at` | TEXT NOT NULL | |
@@ -117,6 +132,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 - 取记录条件：`week_start = ?`（或 `month_start = ?`），不看 `updated_at`。
 - **待办看完成时刻，不看 `created_at`**：一条待办归哪个周期，只由"它在哪一周被勾掉"决定，上周记的待办这周做完就算这周的（需求 §4 完成时刻、FR-11）。没勾掉的待办不属于任何报表周期。落法与记录的 ① 同源：勾掉那一刻把 `done_week_start` / `done_month_start` 冗余存下，取消勾选就清空，查询走列相等而不是时间区间——SQL 里不出现日期与时区函数，`done_at` 永不可能是未来值，所以"生成中的周期截至此刻"这条对待办天然成立，不需要额外条件。
 - **阶段同样看勾掉时刻**：阶段的归属口径与待办一致，勾掉那一刻把 `done_week_start` / `done_month_start` 冗余存下，取消勾选清空。一条阶段归哪一期，与它的父任务何时记下、何时勾掉都无关（ADR-0030）。
+- **日报看日期本身**：`entry_day` 落在周期内就进这一期，写下的时刻与修改的时刻都不参与归属（ADR-0031）。补写周五的日报在周六保存，仍然算周五那一周，不会落到下一周。
 
 ## 3. 传输与部署
 
@@ -145,7 +161,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `POST /v1/notes` | 新建 | 请求 `{body}`；响应含算好的 `week_start` |
 | `PATCH /v1/notes/{id}` | 修改 | 只接受 `{body}`；**不接受 `created_at`**，归属不动 |
 | `DELETE /v1/notes/{id}` | 删除 | 幂等，已删除返回 404 |
-| `GET /v1/periods/now` | 现在算哪个周期 | 返回 `week_start`/`week_end`/`month_start`/`month_end`（含端点）与 `now`、`local_tz`。存在的理由：归属算法只准有一处实现，客户端点"生成本周"要的 `period_start` 从这里拿，不在 Kotlin 里重算周一 |
+| `GET /v1/periods/now` | 现在算哪个周期 | 返回 `today`/`week_start`/`week_end`/`month_start`/`month_end`（起止日含端点）与 `now`、`local_tz`。存在的理由：归属算法只准有一处实现，客户端点"生成本周"要的 `period_start` 与日报默认日期都从这里拿，不在 Kotlin 里重算周一或当天 |
 | `GET /v1/reports` | 报表列表 | `kind`、`limit`；返回含 `status` |
 | `GET /v1/reports/{kind}/{period_start}` | 取单份 | 未生成返回 404 + `code:"not_generated"` |
 | `POST /v1/reports/{kind}/{period_start}/generate` | 手动生成 | 同步返回结果；失败也要落 `status=failed` |
@@ -161,6 +177,8 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `POST /v1/books` | 新建 | 请求 `{title, author?, finished_month?}`；书名必填 ≤100 码点，作者 ≤100 码点；`finished_month` 缺省为服务端本地时区的当月，给了必须是带零填充的 `YYYY-MM`。响应含 `id` 与两个时间戳 |
 | `PATCH /v1/books/{id}` | 改 | 接受 `{title}` / `{author}` / `{finished_month}` / `{takeaway}` 任意组合，只改发过来的字段；书名与年月不能清空，作者与心得传空串等于清掉；心得 ≤200 码点（ADR-0029）。字段全缺 → 400 |
 | `DELETE /v1/books/{id}` | 删除 | 幂等，已删除返回 404 |
+| `GET /v1/dailies/{day}` | 取某天的日报 | `day` 是 `YYYY-MM-DD`；没有写过返回 404 `code:"not_found"`，客户端按“这天还没写”显示空表，不算错误 |
+| `PUT /v1/dailies/{day}` | 写/改某天的日报 | 请求 `{priorities, done, risk}`，三段都是全量覆盖、可空、每段 ≤2000 码点；`day` 必须是合法自然日。没有这天的行则新建，已有则覆盖三节与 `updated_at`。三节全空等于清掉，行可以保留但不再进素材。响应回整条日报 |
 | `GET /v1/app/release` | 有没有新版可装 | 读 `<MEMORA_RELEASE_DIR>/release.json`，回 `{version_code, version_name, notes, size}`；`size` 由服务端 stat `app.apk` 得到，不是发布时手填的。没配目录或文件不在 → 404 `not_released`；清单在而包不在（发了一半）→ 500 `release_bad` |
 | `GET /v1/app/release/file` | 拉 APK 本体 | `application/vnd.android.package-archive`，走 `http.ServeContent`，因此带 `Accept-Ranges`；这条响应单独把 HTTP/2 单流写期限放宽到十分钟，避免慢网在一分钟被 `RST_STREAM` 掐断（[ADR-0022](../decisions/0022-download-write-deadline.md)）。文件缺失同样 404 `not_released`。服务端支持续传，客户端目前断了从头重下——10 MB 量级下那段偏移状态机不值（见 [android-client.md](android-client.md) §边界与异常） |
 
@@ -184,15 +202,16 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 ## 6. 生成报表
 
-1. 按周期取全部 `notes.body`，按 `created_at` 升序；另取该周期内**已完成**的 `tasks.body` 与 `takeaway`，按 `done_at` 升序；再取该周期内**已完成**的 `task_stages.body`、`takeaway` 与所属父任务的 `tasks.body`，按 `done_at` 升序。三路素材分开列进提示词，不混成一段——模型要分得清"我记下的想法""我勾掉的事项"和"某件事推进到了哪个阶段"，否则需求 §5 第 4 条那条"不许编造"没法归因。条数写进 `source_count`。
-1.1 `source_count` 的口径由此变了：它是**喂给模型的素材条数**（记录数 + 本周期完成的待办数 + 本周期完成的阶段数），不再是"该周期记录条数"。FR-08 的验收文案跟着改成"依据了多少条素材"。
-1.2 空周期的判据是"三路加起来为 0"：本周一条记录都没记、只勾掉了三条待办或两个阶段，照样要能出报（那些正是这周做完的事）。
+1. 按周期取全部 `notes.body`，按 `created_at` 升序；另取该周期内**已完成**的 `tasks.body` 与 `takeaway`，按 `done_at` 升序；再取该周期内**已完成**的 `task_stages.body`、`takeaway` 与所属父任务的 `tasks.body`，按 `done_at` 升序；最后取该周期内 `entry_day` 落进来的日报，按日期升序。四路素材分开列进提示词，不混成一段——模型要分得清“我记下的想法”“我勾掉的事项”“某件事推进到了哪个阶段”和“我当天亲笔写的总结”，否则需求 §5 第 4 条那条“不许编造”没法归因。条数写进 `source_count`。
+1.1 `source_count` 的口径由此变了：它是**喂给模型的素材条数**（记录数 + 本周期完成的待办数 + 本周期完成的阶段数 + 本周期日报数），不再是“该周期记录条数”。FR-08 的验收文案跟着改成“依据了多少条素材”。
+1.2 空周期的判据是“四路加起来为 0”：本周一条记录都没记、只勾掉了三条待办、两个阶段或只写了一天日报，照样要能出报（那些正是这周做完或总结过的事）。
 1.3 `takeaway` 非空时跟在同一条待办后面，写成「（心得：…）」，提示词规则里说明它是完成后的补充；没有心得的待办只给标题，模型不得补一个结果（ADR-0027）。条数仍按待办算，心得不是独立素材。
 1.4 `books` 不进任何一路素材：哪怕某本书的 `finished_month` 落在这个周期，也不喂给模型。周报月报是工作口径，读一本书不等于一份交付（ADR-0029）。空周期判据也不考虑书。
 1.5 阶段素材写成「父任务正文 · 阶段名」，心得非空时再跟「（心得：…）」。提示词规则：阶段完成算"某件事推进了一段"，不得写成整件事已交付；父任务同周期也勾掉时，把阶段与父任务合并叙述，不得重复计两份；没写心得的阶段同样不给它补结果（ADR-0030）。
-2. 调 DeepSeek 的对话补全接口（OpenAI 兼容），`model` 走配置。提示词要点：只用给到的内容、不编造未提到的交付物（需求 §5 第 4 条，含给没写心得的待办或阶段编一个结果）、按主题归并而非逐日流水、输出纯文本。**三类素材分段给出且标明语义**——勾掉的待办就是已交付，阶段完成是某件事推进了一段，想法只是当时的念头；混成一段模型就分不开这三件事，"不许编造"那条也就没了核查抓手。
+1.6 日报素材按「日期 + 三节」给出：优先级、完成、卡点各自标注。提示词规则：这是本人当晚亲笔写的总结，可信度最高、措辞优先采用；日报的优先级是**计划**不是完成，只能进“下一步”；日报的卡点直接进“风险与需要确认”；日报里已经写过的事，其他三路素材里也出现时合并叙述、不得计两份；日报没提到的其他素材照样纳入，不许被日报压低。三节全空的日报不会出现在输入里（ADR-0031）。
+2. 调 DeepSeek 的对话补全接口（OpenAI 兼容），`model` 走配置。提示词要点：只用给到的内容、不编造未提到的交付物（需求 §5 第 4 条，含给没写心得的待办或阶段编一个结果）、按主题归并而非逐日流水、输出纯文本。**四类素材分段给出且标明语义**——勾掉的待办就是已交付，阶段完成是某件事推进了一段，想法只是当时的念头，日报是本人亲笔的总结；混成一段模型就分不开这几件事，“不许编造”那条也就没了核查抓手。
 3. 超时与重试：单次调用超时给到 60s（FR-04 的量级），失败重试 1 次；仍失败则 `status=failed` + `fail_reason`。
-4. 空周期（记录、已完成待办与已完成阶段三路都为 0）不生成，直接返回 `code:"no_records"`——避免让模型憋出一份空话。
+4. 空周期（记录、已完成待办、已完成阶段与日报四路都为 0）不生成，直接返回 `code:"no_records"`——避免让模型憋出一份空话。
 
 ## 7. 定时
 
@@ -202,7 +221,7 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 
 具体两个时刻（周报、月报各自周几几点）仍待需求方定，配置项留好。
 
-候选周期来自三路并集去重：周报取 `notes.week_start`、`tasks.done_week_start`、`task_stages.done_week_start` 三列的 DISTINCT，月报同理取 `month_start` / `done_month_start`。只靠记录会漏掉"这周一条笔记没记、但勾掉三件事或两个阶段"的那一周，而那一周恰恰最需要自动出报（FR-05 的不静默缺失对三类素材同等成立）。
+候选周期来自四路并集去重：周报取 `notes.week_start`、`tasks.done_week_start`、`task_stages.done_week_start` 三列的 DISTINCT，再加上“日报的 `entry_day` 按服务端时区折成周一”的 DISTINCT；月报同理取 `month_start` / `done_month_start` 与日报折成的月初。只靠记录会漏掉“这周一条笔记没记、但勾掉三件事、两个阶段或写了一天日报”的那一周，而那一周恰恰最需要自动出报（FR-05 的不静默缺失对四类素材同等成立）。日报折周期在 Go 里用 `internal/period` 算，SQL 里不出现日期函数，与 §2 同规。
 
 一轮扫描里每种报表最多补最近六份，其余留到下一轮。理由是：关机几个月后重启，候选可能有几十周，一次全打完会把重启后的头几分钟全占在排队等模型上（推断，未实测）。候选按周期由新到旧排，所以先拿到的是最近的。
 

@@ -147,6 +147,16 @@ CREATE TABLE IF NOT EXISTS books (
 );
 CREATE INDEX IF NOT EXISTS idx_books_month ON books(finished_month DESC);
 
+CREATE TABLE IF NOT EXISTS dailies (
+	id         INTEGER PRIMARY KEY,
+	entry_day  TEXT    NOT NULL UNIQUE,
+	priorities TEXT    NOT NULL DEFAULT '',
+	done       TEXT    NOT NULL DEFAULT '',
+	risk       TEXT    NOT NULL DEFAULT '',
+	created_at TEXT    NOT NULL,
+	updated_at TEXT    NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS reports (
 	id            INTEGER PRIMARY KEY,
 	kind          TEXT    NOT NULL CHECK (kind IN ('week','month')),

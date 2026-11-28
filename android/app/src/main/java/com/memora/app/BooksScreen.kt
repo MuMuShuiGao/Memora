@@ -527,9 +527,3 @@ private fun List<Book>.insertFresh(book: Book): List<Book> {
     val at = indexOfFirst { it.finishedMonth <= book.finishedMonth }
     return if (at < 0) this + book else subList(0, at) + book + subList(at, size)
 }
-
-// 按码点截住输入，和服务端数的是同一件事（ADR-0029）；多粘贴出来的部分不进草稿。
-private fun clampCodePoints(text: String, max: Int): String {
-    if (text.codePointCount(0, text.length) <= max) return text
-    return text.substring(0, text.offsetByCodePoints(0, max))
-}

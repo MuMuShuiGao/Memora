@@ -62,6 +62,8 @@ func (s *Server) Handler() http.Handler {
 		{"POST /v1/books", s.createBook},
 		{"PATCH /v1/books/{id}", s.updateBook},
 		{"DELETE /v1/books/{id}", s.deleteBook},
+		{"GET /v1/dailies/{day}", s.getDaily},
+		{"PUT /v1/dailies/{day}", s.putDaily},
 		{"GET /v1/periods/now", s.periodsNow},
 		{"GET /v1/reports", s.listReports},
 		{"GET /v1/reports/{kind}/{period_start}", s.getReport},

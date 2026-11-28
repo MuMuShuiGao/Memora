@@ -221,6 +221,43 @@ func TestTaskOnlyWeekEntersBackfillCandidates(t *testing.T) {
 	}
 }
 
+func TestDailyOnlyWeekEntersBackfillCandidates(t *testing.T) {
+	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
+	llm := &fakeCompleter{}
+	g, st := newTestGenerator(t, llm, &now)
+	ctx := context.Background()
+
+	// 上周只写了一天日报，没有记录、待办、阶段。
+	seedDaily(t, st, "2026-11-18", "上周的优先级", "", "", now.AddDate(0, 0, -7))
+	// 本周（未结束）也写了一条，它不该进候选。
+	seedDaily(t, st, "2026-11-25", "本周的优先级", "", "", now)
+
+	got, err := newTestScheduler(g, st).missingPeriods(ctx, Week, now)
+	if err != nil {
+		t.Fatalf("missingPeriods: %v", err)
+	}
+	if len(got) != 1 || got[0] != "2026-11-16" {
+		t.Errorf("日报撑起来的候选 = %v, 期望只有 [2026-11-16]", got)
+	}
+}
+
+func TestDailyOnlyMonthEntersBackfillCandidates(t *testing.T) {
+	now := time.Date(2026, time.November, 25, 10, 0, 0, 0, plus8)
+	llm := &fakeCompleter{}
+	g, st := newTestGenerator(t, llm, &now)
+	ctx := context.Background()
+
+	seedDaily(t, st, "2026-10-15", "上月的优先级", "", "", now.AddDate(0, -1, 0))
+
+	got, err := newTestScheduler(g, st).missingPeriods(ctx, Month, now)
+	if err != nil {
+		t.Fatalf("missingPeriods month: %v", err)
+	}
+	if len(got) != 1 || got[0] != "2026-10-01" {
+		t.Errorf("日报撑起来的月报候选 = %v, 期望只有 [2026-10-01]", got)
+	}
+}
+
 func TestMergeDescUnionsTwoCandidateSources(t *testing.T) {
 	notes := []string{"2026-11-16", "2026-11-02"}
 	tasks := []string{"2026-11-23", "2026-11-16"}

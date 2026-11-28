@@ -128,6 +128,18 @@ class MemoApi(private val baseUrl: String) {
         raw("DELETE", "/v1/books/$id", null)
     }
 
+    // 日报（ADR-0031）：一个自然日一份。GET 404 表示这天还没写，是空表单不是错误；
+    // PUT 交三段全文，服务端整份替换，全空即清掉这天的素材。
+    suspend fun getDaily(day: String): Daily? =
+        try {
+            get("/v1/dailies/$day")
+        } catch (e: ApiError) {
+            if (e.kind == ApiError.Kind.NotFound) null else throw e
+        }
+
+    suspend fun putDaily(day: String, priorities: String, done: String, risk: String): Daily =
+        sendBody("PUT", "/v1/dailies/$day", DailyWriteRequest(priorities, done, risk))
+
     // 更新通道（ADR-0015）：没有可更新的版本时服务端回 404，这不算错误。
     // 检查更新的调用方不该因为"还没发过版"被打扰，所以这里把 404 摘成 null，其余照抛。
     suspend fun releaseInfo(): ReleaseInfo? =
@@ -307,6 +319,13 @@ class MemoApi(private val baseUrl: String) {
     )
 
     @Serializable
+    private data class DailyWriteRequest(
+        val priorities: String,
+        val done: String,
+        val risk: String,
+    )
+
+    @Serializable
     private data class DoneRequest(val done: Boolean)
 
     @Serializable
@@ -337,6 +356,9 @@ class MemoApi(private val baseUrl: String) {
         // 阶段名与阶段数的上限（ADR-0030）。服务端同样拦一道，超限回 400。
         const val MAX_STAGE_BODY_CHARS = 30
         const val MAX_STAGES_PER_TASK = 5
+
+        // 日报每段的字数上限（ADR-0031），按码点计。三段各拦一道，服务端超限回 413。
+        const val MAX_DAILY_CHARS = 2000
 
         // 一次拉这么多。服务端的上限就是 200（internal/api/notes.go 的 maxListLimit），
         // 取满它能让"更早的"在绝大多数情况下一次到底。

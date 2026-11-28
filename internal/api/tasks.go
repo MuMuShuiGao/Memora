@@ -225,8 +225,13 @@ func (s *Server) dueOnOrToday(raw string) (string, error) {
 // readJSON 解一个非 noteBody 的请求体。复用 maxBodyBytes 那层防弹，
 // 错误形状和 readBody 保持一致，界面上的提示文案才不会分两套。
 func (s *Server) readJSON(w http.ResponseWriter, r *http.Request, dst any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodyBytes)
-	dec := json.NewDecoder(io.LimitReader(r.Body, maxBodyBytes))
+	return s.readJSONLimit(w, r, dst, maxBodyBytes)
+}
+
+// readJSONLimit 给请求体上限比单条记录更宽的对象用（日报三段各 2000 码点）。
+func (s *Server) readJSONLimit(w http.ResponseWriter, r *http.Request, dst any, limit int64) bool {
+	r.Body = http.MaxBytesReader(w, r.Body, limit)
+	dec := json.NewDecoder(io.LimitReader(r.Body, limit))
 	if err := dec.Decode(dst); err != nil {
 		var maxErr *http.MaxBytesError
 		switch {

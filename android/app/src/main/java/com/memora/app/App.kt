@@ -40,14 +40,16 @@ import androidx.compose.ui.unit.dp
 import kotlinx.coroutines.launch
 
 private const val SECTION_TASKS = "tasks"
+private const val SECTION_DAILY = "daily"
 private const val SECTION_CALENDAR = "calendar"
 private const val SECTION_NOTES = "notes"
 private const val SECTION_BOOKS = "books"
 private const val SECTION_REPORTS = "reports"
 
-// 抽屉里的顺序就是日常顺序：待办是落点，报表在最后（ADR-0028）。
+// 抽屉里的顺序就是日常顺序：待办是落点，日报次之，报表在最后（ADR-0028、ADR-0031）。
 private val SECTIONS = listOf(
     SECTION_TASKS to "待办",
+    SECTION_DAILY to "日报",
     SECTION_CALENDAR to "日历",
     SECTION_NOTES to "记录",
     SECTION_BOOKS to "读书",
@@ -187,6 +189,8 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
                     SECTION_NOTES -> NotesScreen(api, onForgetPassphrase) { note ->
                         editing = Editing(note)
                     }
+
+                    SECTION_DAILY -> DailyScreen(api, onForgetPassphrase)
 
                     SECTION_CALENDAR -> CalendarScreen(api, onForgetPassphrase)
 

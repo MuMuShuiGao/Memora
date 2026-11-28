@@ -111,7 +111,12 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 	if err != nil {
 		return store.Report{}, err
 	}
-	if len(notes) == 0 && len(tasks) == 0 && len(stages) == 0 {
+	// 日报是第四路素材：本人按日期手写的总结，可信度最高（ADR-0031）。
+	dailies, err := g.dailiesIn(ctx, kind, periodStart)
+	if err != nil {
+		return store.Report{}, err
+	}
+	if len(notes) == 0 && len(tasks) == 0 && len(stages) == 0 && len(dailies) == 0 {
 		return store.Report{}, ErrNoRecords
 	}
 	// 截止时刻取"读完素材的那一刻"：手动生成未结束的周期时，这就是 design §2
@@ -122,8 +127,8 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 		return store.Report{}, err
 	}
 
-	userPrompt := g.buildUserPrompt(kind, periodStart, periodEnd, notes, tasks, stages)
-	sources := len(notes) + len(tasks) + len(stages)
+	userPrompt := g.buildUserPrompt(kind, periodStart, periodEnd, notes, tasks, stages, dailies)
+	sources := len(notes) + len(tasks) + len(stages) + len(dailies)
 
 	// 60s 是"这一次生成"的总预算，覆盖所有尝试。每次调用重新计时的话，
 	// "重试一次"实际会变成"最多 120s"，手动生成那个同步请求就等得没道理了。
@@ -160,7 +165,7 @@ func (g *Generator) Generate(ctx context.Context, kind Kind, periodStart string)
 				return store.Report{}, ferr
 			}
 			g.log.Info("报表生成完成", "kind", string(kind), "period", periodStart,
-				"notes", len(notes), "tasks", len(tasks), "stages", len(stages), "sources", sources)
+				"notes", len(notes), "tasks", len(tasks), "stages", len(stages), "dailies", len(dailies), "sources", sources)
 			return ready, nil
 		}
 
@@ -223,14 +228,30 @@ func (g *Generator) stagesIn(ctx context.Context, kind Kind, periodStart string)
 	return g.st.StagesDoneForMonth(ctx, periodStart)
 }
 
+// dailiesIn 取 entry_day 落在周期内的日报。右端用 period 包算出的下周一/下月 1 号，
+// 传成半开区间的右界——SQL 里不出现日期函数（design §2）。
+func (g *Generator) dailiesIn(ctx context.Context, kind Kind, periodStart string) ([]store.Daily, error) {
+	var end time.Time
+	var err error
+	if kind == Week {
+		_, end, err = period.WeekRange(periodStart, g.loc)
+	} else {
+		_, end, err = period.MonthRange(periodStart, g.loc)
+	}
+	if err != nil {
+		return nil, err
+	}
+	return g.st.DailiesBetween(ctx, periodStart, period.DayID(end, g.loc))
+}
+
 // buildUserPrompt 按时间升序列出素材，每行前缀本地日期。给日期是为了让模型分得清
 // "同一件事被记了两次"和"两个不同周期的同名事项"；它不许凭日期编造内容，那条写在提示词里。
 //
-// 三路素材分三段、各自标出语义，不混成一段流水：记录是"当时想到的"，勾掉的待办是
-// "确实做完了的"，勾掉的阶段是"某件事推进了一段"。混起来模型就分不开这三件事，而
-// 需求 §5 第 4 条要求正文不得出现素材里没有的事实——来源糊掉之后那条约束连核查的抓手
-// 都没有（ADR-0014、ADR-0030）。
-func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.Note, tasks []store.Task, stages []store.DoneStage) string {
+// 四路素材分四段、各自标出语义，不混成一段流水：记录是"当时想到的"，勾掉的待办是
+// "确实做完了的"，勾掉的阶段是"某件事推进了一段"，日报是"本人亲笔写的总结"。混起来
+// 模型就分不开这几件事，而需求 §5 第 4 条要求正文不得出现素材里没有的事实——来源糊掉
+// 之后那条约束连核查的抓手都没有（ADR-0014、ADR-0030、ADR-0031）。
+func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.Note, tasks []store.Task, stages []store.DoneStage, dailies []store.Daily) string {
 	kindName := "周报"
 	if kind == Month {
 		kindName = "月报"
@@ -238,7 +259,7 @@ func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.
 
 	var b strings.Builder
 	fmt.Fprintf(&b, "请生成 %s 覆盖的自然周期：%s 至 %s（含两端，按 %s 的日历）。\n", kindName, start, end, g.loc)
-	b.WriteString("下面三类素材彼此独立：随手记下的想法、这个周期内勾掉的待办、以及在这个周期内勾掉的阶段。\n")
+	b.WriteString("下面四类素材彼此独立：随手记下的想法、这个周期内勾掉的待办、这个周期内勾掉的阶段，以及本人按自然日手写的日报。\n")
 
 	b.WriteString("\n想法记录按时间升序，每行一条，方括号内是记录日期：\n\n")
 	if len(notes) == 0 {
@@ -272,7 +293,24 @@ func (g *Generator) buildUserPrompt(kind Kind, start, end string, notes []store.
 		b.WriteString("\n")
 	}
 
-	fmt.Fprintf(&b, "\n共 %d 条素材：%d 条记录 + %d 条已完成待办 + %d 条已完成阶段。",
-		len(notes)+len(tasks)+len(stages), len(notes), len(tasks), len(stages))
+	b.WriteString("\n本人手写的日报，按日期升序；只列他写过的节，正文是他的原话：\n\n")
+	if len(dailies) == 0 {
+		b.WriteString("（无）\n")
+	}
+	for _, d := range dailies {
+		fmt.Fprintf(&b, "[%s]\n", d.EntryDay)
+		if d.Priorities != "" {
+			fmt.Fprintf(&b, "优先级（是计划，不是完成）：%s\n", d.Priorities)
+		}
+		if d.Done != "" {
+			fmt.Fprintf(&b, "做成了什么：%s\n", d.Done)
+		}
+		if d.Risk != "" {
+			fmt.Fprintf(&b, "卡点与没做完的：%s\n", d.Risk)
+		}
+	}
+
+	fmt.Fprintf(&b, "\n共 %d 条素材：%d 条记录 + %d 条已完成待办 + %d 条已完成阶段 + %d 天日报。",
+		len(notes)+len(tasks)+len(stages)+len(dailies), len(notes), len(tasks), len(stages), len(dailies))
 	return b.String()
 }

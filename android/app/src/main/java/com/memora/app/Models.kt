@@ -85,6 +85,17 @@ data class Book(
 @Serializable
 data class BookList(val books: List<Book> = emptyList(), val count: Int = 0)
 
+// 日报（ADR-0031）：一个自然日一行，三段纯文本。三段全空就是这天没有素材，
+// 但行还可能留在库里——"有没有写"只看文字，不看这条记录在不在。
+@Serializable
+data class Daily(
+    val id: Long = 0,
+    @SerialName("entry_day") val entryDay: String = "",
+    val priorities: String = "",
+    val done: String = "",
+    val risk: String = "",
+)
+
 // 更新通道（ADR-0015）：versionCode 是唯一的判据，服务端没有已发布版本时这个类根本不出现。
 // size 由服务端 stat 出来，不是发布时手填的，所以"约多少 MB"不会和真实文件对不上。
 @Serializable
@@ -99,6 +110,8 @@ data class ReleaseInfo(
 data class Periods(
     val now: String = "",
     @SerialName("local_tz") val localTz: String = "",
+    // 日报的「今天」与服务端口径一致（ADR-0031）：客户端不拿手机日期另算一份。
+    val today: String = "",
     @SerialName("week_start") val weekStart: String = "",
     @SerialName("week_end") val weekEnd: String = "",
     @SerialName("month_start") val monthStart: String = "",

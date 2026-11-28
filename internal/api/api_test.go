@@ -336,6 +336,9 @@ func TestPeriodsNowAgreesWithOwnership(t *testing.T) {
 	if p.LocalTZ != "UTC+8" {
 		t.Errorf("local_tz = %q, 期望配置里那个 UTC+8", p.LocalTZ)
 	}
+	if p.Today != "2026-11-25" {
+		t.Errorf("today = %q, 期望 2026-11-25", p.Today)
+	}
 	if now, err := time.Parse(time.RFC3339, p.Now); err != nil {
 		t.Errorf("now 不是 RFC3339: %q (%v)", p.Now, err)
 	} else if !now.Equal(time.Date(2026, time.November, 25, 10, 0, 0, 0, testTZ)) {

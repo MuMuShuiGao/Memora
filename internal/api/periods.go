@@ -12,6 +12,7 @@ import (
 type periodsResponse struct {
 	Now        string `json:"now"`
 	LocalTZ    string `json:"local_tz"`
+	Today      string `json:"today"`
 	WeekStart  string `json:"week_start"`
 	WeekEnd    string `json:"week_end"`
 	MonthStart string `json:"month_start"`
@@ -34,6 +35,7 @@ func (s *Server) periodsNow(w http.ResponseWriter, r *http.Request) {
 	s.ok(w, periodsResponse{
 		Now:        now.Format(time.RFC3339),
 		LocalTZ:    s.cfg.LocalTZName,
+		Today:      period.DayID(now, loc),
 		WeekStart:  weekStart,
 		WeekEnd:    weekEnd,
 		MonthStart: monthStart,

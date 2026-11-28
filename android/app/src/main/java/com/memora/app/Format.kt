@@ -31,6 +31,10 @@ fun formatDay(iso: String): String = parse(iso)?.format(DAY) ?: iso
 
 fun formatTime(iso: String): String = parse(iso)?.format(TIME) ?: ""
 
+// 完成时刻落在手机本地哪一天。只服务日报的「带入当天完成」，
+// 不拿它推周期归属——那是服务端算好的（ADR-0031）。
+fun localDayOf(iso: String): String? = parse(iso)?.toLocalDate()?.toString()
+
 // 安排日期是字面自然日，不跟时间戳一起换算时区（ADR-0021）。
 fun today(): LocalDate = LocalDate.now()
 
@@ -94,4 +98,10 @@ fun monthTitle(month: String): String {
 fun monthShort(month: String): String {
     val ym = parseMonth(month) ?: return month
     return "${ym.monthValue}月"
+}
+
+// 按码点截住输入，和服务端数的是同一件事（ADR-0029/0031）；多粘贴出来的部分不进草稿。
+fun clampCodePoints(text: String, max: Int): String {
+    if (text.codePointCount(0, text.length) <= max) return text
+    return text.substring(0, text.offsetByCodePoints(0, max))
 }

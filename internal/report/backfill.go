@@ -163,13 +163,14 @@ func (s *Scheduler) periodEnded(kind Kind, id string, now time.Time) bool {
 	return !end.After(now)
 }
 
-// finishedPeriods 列出所有"有素材"的周期：记过笔记的、勾掉过待办的、勾掉过阶段的。
-// 只靠第一路会漏掉"这周啥也没记、但勾掉了三件事或两个阶段"那一周——而那一周的报表
-// 恰恰最该自动生成（FR-05 不静默缺失）。三路各自倒序，合并后仍是由新到旧。
+// finishedPeriods 列出所有"有素材"的周期：记过笔记的、勾掉过待办的、勾掉过阶段的，
+// 以及写过日报的。只靠第一路会漏掉"这周啥也没记、但勾掉了三件事、两个阶段或只写了一
+// 天日报"那一周——而那一周的报表恰恰最该自动生成（FR-05 不静默缺失）。各路各自倒序，
+// 合并后仍是由新到旧。日报只存日期，折成周/月起点在 Go 里做，SQL 不出现日期函数。
 func (s *Scheduler) finishedPeriods(ctx context.Context, kind Kind) ([]string, error) {
 	var (
-		fromNotes, fromTasks, fromStages []string
-		err                              error
+		fromNotes, fromTasks, fromStages, fromDailies []string
+		err                                           error
 	)
 	if kind == Week {
 		fromNotes, err = s.st.DistinctWeekStarts(ctx)
@@ -195,7 +196,25 @@ func (s *Scheduler) finishedPeriods(ctx context.Context, kind Kind) ([]string, e
 	if err != nil {
 		return nil, err
 	}
-	return mergeDesc(mergeDesc(fromNotes, fromTasks), fromStages), nil
+	days, err := s.st.DistinctDailyDays(ctx)
+	if err != nil {
+		return nil, err
+	}
+	for _, day := range days {
+		t, err := time.ParseInLocation("2006-01-02", day, s.loc)
+		if err != nil {
+			// 日报的日期是 API 层校验过的合法自然日；真读到脏数据就跳过并留日志，
+			// 不让一行坏数据把整个补跑扫描带崩（与 periodEnded 的处理同规）。
+			s.log.Error("日报日期不合法，跳过", "day", day, "err", err.Error())
+			continue
+		}
+		if kind == Week {
+			fromDailies = append(fromDailies, period.WeekStartID(t, s.loc))
+		} else {
+			fromDailies = append(fromDailies, period.MonthStartID(t, s.loc))
+		}
+	}
+	return mergeDesc(mergeDesc(fromNotes, fromTasks), mergeDesc(fromStages, fromDailies)), nil
 }
 
 // mergeDesc 把两段各自倒序的周期 id 合成一段倒序去重的列表。

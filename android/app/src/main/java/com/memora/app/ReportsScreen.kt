@@ -207,7 +207,7 @@ fun ReportsScreen(api: MemoApi, local: LocalStore, onUnauthorized: () -> Unit) {
 
                     shown.status == "ready" -> Column {
                         Text(
-                            "用了 ${shown.sourceCount ?: 0} 条记录，生成于 ${formatInstant(shown.generatedAt ?: "")}",
+                            "用了 ${shown.sourceCount ?: 0} 条素材，生成于 ${formatInstant(shown.generatedAt ?: "")}",
                             style = MaterialTheme.typography.labelSmall,
                             color = InkSoft,
                         )
