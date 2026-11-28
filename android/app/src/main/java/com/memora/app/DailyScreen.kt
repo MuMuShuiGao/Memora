@@ -24,18 +24,28 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.unit.dp
+import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.time.temporal.ChronoUnit
 
 /**
- * 日报屏（ADR-0031）：一天一页交接班记录，三段手写。
+ * 日报屏（ADR-0031、ADR-0032）：一天一页交接班记录，三段手写，停顿 1.5 秒自动保存。
  * 日期、今天与右箭头边界都取服务端 periods/now 的 today，不拿手机日期另算一份。
  */
 @Composable
-fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
+fun DailyScreen(
+    api: MemoApi,
+    onUnauthorized: () -> Unit,
+    jumpDay: String? = null,
+    onJumpConsumed: () -> Unit = {},
+) {
     val scope = rememberCoroutineScope()
     val focusManager = LocalFocusManager.current
+    // 两个 PUT 不并发：先到的写完，后到的在锁里重新比一次基线，没变化就不发。
+    val saveMutex = remember { Mutex() }
 
     var today by remember { mutableStateOf<String?>(null) }
     // 草稿与"已保存的那份"都进 saveable：切区块回来不该被重拉覆盖，也不该误报未保存。
@@ -51,17 +61,84 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     var tasks by remember { mutableStateOf<List<Task>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var saving by remember { mutableStateOf(false) }
-    var notice by remember { mutableStateOf<String?>(null) }
+    var saveError by remember { mutableStateOf<String?>(null) }
+    var savedAt by remember { mutableStateOf<String?>(null) }
+    var justCleared by remember { mutableStateOf(false) }
     var loadError by remember { mutableStateOf<String?>(null) }
     var reload by remember { mutableStateOf(0) }
-    var savedFlash by remember { mutableStateOf(false) }
-    var flashKey by remember { mutableStateOf(0) }
 
-    LaunchedEffect(flashKey) {
-        if (flashKey > 0) {
-            savedFlash = true
-            delay(2000)
-            savedFlash = false
+    fun isDirty(): Boolean =
+        priorities.trim() != savedPriorities ||
+            doneText.trim() != savedDone ||
+            risk.trim() != savedRisk
+
+    // 自动保存一次全量三段。成功只把这次发出去的文字作为新基线，不回写正在编辑的草稿；
+    // 失败保留输入，等下一次输入或点重试才再发，不自动无限重试。
+    suspend fun flushNow(): Boolean {
+        val target = day
+        if (target.isEmpty() || loadedFor != target) return true
+        return saveMutex.withLock {
+            if (day != target || loadedFor != target) return@withLock true
+            val p = priorities.trim()
+            val d = doneText.trim()
+            val r = risk.trim()
+            val hadContent = savedPriorities.isNotEmpty() || savedDone.isNotEmpty() || savedRisk.isNotEmpty()
+            if (p == savedPriorities && d == savedDone && r == savedRisk) return@withLock true
+            // 从没写过的空表单不产生请求；从有字清到全空才发一次。
+            if (p.isEmpty() && d.isEmpty() && r.isEmpty() && !hadContent) return@withLock true
+            saving = true
+            try {
+                api.putDaily(target, p, d, r)
+                savedPriorities = p
+                savedDone = d
+                savedRisk = r
+                saveError = null
+                savedAt = clockNow()
+                justCleared = hadContent && p.isEmpty() && d.isEmpty() && r.isEmpty()
+                true
+            } catch (e: ApiError) {
+                if (e.kind == ApiError.Kind.Unauthorized) {
+                    onUnauthorized()
+                } else {
+                    saveError = describe(e)
+                }
+                false
+            } finally {
+                saving = false
+            }
+        }
+    }
+
+    fun requestSave() {
+        scope.launch { flushNow() }
+    }
+
+    suspend fun loadDay(target: String): Boolean {
+        loading = true
+        loadError = null
+        return try {
+            val d = api.getDaily(target)
+            priorities = d?.priorities.orEmpty()
+            doneText = d?.done.orEmpty()
+            risk = d?.risk.orEmpty()
+            savedPriorities = priorities
+            savedDone = doneText
+            savedRisk = risk
+            day = target
+            loadedFor = target
+            saveError = null
+            savedAt = null
+            justCleared = false
+            true
+        } catch (e: ApiError) {
+            if (e.kind == ApiError.Kind.Unauthorized) {
+                onUnauthorized()
+            } else {
+                loadError = describe(e)
+            }
+            false
+        } finally {
+            loading = false
         }
     }
 
@@ -71,25 +148,24 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         try {
             val p = api.periods()
             today = p.today
-            val target = day.ifEmpty { p.today }
+            val target = jumpDay?.takeIf { it.isNotEmpty() } ?: day.ifEmpty { p.today }
             if (target.isEmpty()) {
                 loadError = "服务端没有给出今天"
                 return@LaunchedEffect
             }
-            day = target
-            // 带入按钮要用最新顺序，每次进屏都重拉；拿到手就换掉上一份。
+            // 抄入动作要用最新顺序，每次进屏都重拉；拿到手就换掉上一份。
             tasks = api.listTasks().tasks
-            if (loadedFor != target) {
-                val d = api.getDaily(target)
-                priorities = d?.priorities.orEmpty()
-                doneText = d?.done.orEmpty()
-                risk = d?.risk.orEmpty()
-                savedPriorities = priorities
-                savedDone = doneText
-                savedRisk = risk
-                loadedFor = target
+            // 从日历跳过来时先把原来那天的字补存，失败就留在原页，不静默丢字。
+            if (loadedFor != target && isDirty() && !flushNow()) {
+                onJumpConsumed()
+                return@LaunchedEffect
             }
-            notice = null
+            if (loadedFor != target) {
+                loadDay(target)
+            }
+            if (!jumpDay.isNullOrEmpty()) {
+                onJumpConsumed()
+            }
         } catch (e: ApiError) {
             if (e.kind == ApiError.Kind.Unauthorized) {
                 onUnauthorized()
@@ -101,79 +177,32 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         }
     }
 
-    fun isDirty(): Boolean =
-        priorities.trim() != savedPriorities ||
-            doneText.trim() != savedDone ||
-            risk.trim() != savedRisk
+    // 输入停顿 1.5 秒落一次盘；保存中又有输入，就等当前请求回来后由锁补一次。
+    val formReady = day.isNotEmpty() && loadedFor == day
+    LaunchedEffect(priorities, doneText, risk, formReady, day) {
+        if (!formReady || !isDirty()) return@LaunchedEffect
+        delay(1500)
+        requestSave()
+    }
 
     fun openDay(target: String) {
+        if (loading) return
+        if (target == day && loadedFor == target) return
         focusManager.clearFocus()
-        day = target
-        loadedFor = ""
-        loadError = null
-        notice = null
         scope.launch {
-            loading = true
-            try {
-                val d = api.getDaily(target)
-                priorities = d?.priorities.orEmpty()
-                doneText = d?.done.orEmpty()
-                risk = d?.risk.orEmpty()
-                savedPriorities = priorities
-                savedDone = doneText
-                savedRisk = risk
-                loadedFor = target
-            } catch (e: ApiError) {
-                if (e.kind == ApiError.Kind.Unauthorized) {
-                    onUnauthorized()
-                } else {
-                    loadError = describe(e)
-                }
-            } finally {
-                loading = false
-            }
+            // 还有在飞的保存就在锁里等它回来；失败留在原页，不静默丢字。
+            if (isDirty() && !flushNow()) return@launch
+            loadDay(target)
         }
     }
 
     fun shiftDay(delta: Long) {
-        if (loading) return
+        if (loading || !formReady) return
         val current = parseDay(day) ?: return
         val next = current.plusDays(delta)
         val ceiling = parseDay(today.orEmpty()) ?: return
         if (next.isAfter(ceiling)) return
-        if (isDirty()) {
-            notice = "先把这天存下，再翻日期"
-            return
-        }
         openDay(next.toString())
-    }
-
-    fun save() {
-        if (saving || loading || day.isEmpty()) return
-        focusManager.clearFocus()
-        scope.launch {
-            saving = true
-            notice = null
-            try {
-                val got = api.putDaily(day, priorities.trim(), doneText.trim(), risk.trim())
-                // 服务端会 trim，把回包写回草稿与基线，免得"存完还是未保存"。
-                priorities = got.priorities
-                doneText = got.done
-                risk = got.risk
-                savedPriorities = got.priorities
-                savedDone = got.done
-                savedRisk = got.risk
-                flashKey++
-            } catch (e: ApiError) {
-                if (e.kind == ApiError.Kind.Unauthorized) {
-                    onUnauthorized()
-                } else {
-                    notice = describe(e)
-                }
-            } finally {
-                saving = false
-            }
-        }
     }
 
     fun bringTasks() {
@@ -211,7 +240,6 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
         return
     }
 
-    val formReady = day.isNotEmpty() && loadedFor == day
     val dirty = isDirty()
     val canBringTasks = tasks.any { !it.done }
     val canBringDone = tasks.any { task ->
@@ -221,6 +249,7 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     val date = parseDay(day)
     val dateTitle = if (date != null) dayTitle(date) else day
     val relative = relativeDay(day, ceiling)
+    val nothingWritten = priorities.isBlank() && doneText.isBlank() && risk.isBlank()
 
     Column(Modifier.fillMaxSize()) {
         Row(
@@ -244,7 +273,18 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                         color = InkSoft,
                     )
                 }
-                Text(dateTitle, style = MaterialTheme.typography.titleLarge, color = Ink)
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text(dateTitle, style = MaterialTheme.typography.titleLarge, color = Ink)
+                    if (relative != null) {
+                        Spacer(Modifier.width(4.dp))
+                        TextAction(
+                            "回今天",
+                            onClick = { openDay(ceiling) },
+                            enabled = !loading && formReady,
+                            color = Vermilion,
+                        )
+                    }
+                }
             }
             IconAction(
                 DeskIcon.Next,
@@ -286,31 +326,39 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                         .fillMaxWidth()
                         .verticalScroll(rememberScrollState()),
                 ) {
+                    if (nothingWritten) {
+                        Text(
+                            "这天还没落笔",
+                            style = MaterialTheme.typography.labelSmall,
+                            color = InkSoft,
+                            modifier = Modifier.padding(start = 20.dp, top = 14.dp),
+                        )
+                    }
                     DailySection(
-                        label = "优先级",
-                        hint = "今天最重要的 1–3 件事",
+                        label = "今天要紧的",
+                        hint = "一两件就够",
                         value = priorities,
                         onValueChange = {
                             priorities = clampCodePoints(it, MemoApi.MAX_DAILY_CHARS)
                         },
-                        actionLabel = "从待办带入",
-                        actionEnabled = canBringTasks && !loading,
+                        actionLabel = if (canBringTasks) "从待办抄五条" else null,
+                        actionEnabled = !loading,
                         onAction = { bringTasks() },
                     )
                     DailySection(
-                        label = "今天做成了什么",
-                        hint = "做成了什么，结果优先",
+                        label = "做成了什么",
+                        hint = "写结果就行，不用交代过程",
                         value = doneText,
                         onValueChange = {
                             doneText = clampCodePoints(it, MemoApi.MAX_DAILY_CHARS)
                         },
-                        actionLabel = "带入当天完成",
-                        actionEnabled = canBringDone && !loading,
+                        actionLabel = if (canBringDone) "抄今天勾掉的" else null,
+                        actionEnabled = !loading,
                         onAction = { bringDone() },
                     )
                     DailySection(
-                        label = "卡点与没做完的",
-                        hint = "卡在谁、等什么决定；没做完的挪到明天",
+                        label = "卡在哪儿了",
+                        hint = "在等什么、什么没做完；没做完的明天接着来",
                         value = risk,
                         onValueChange = {
                             risk = clampCodePoints(it, MemoApi.MAX_DAILY_CHARS)
@@ -319,45 +367,44 @@ fun DailyScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                     Spacer(Modifier.height(16.dp))
                 }
 
-                notice?.let {
-                    Notice(it, Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
-                }
-                Row(
-                    Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    PrimaryAction(
-                        if (saving) "存…" else "存",
-                        onClick = { save() },
-                        enabled = !saving && dirty,
+                when {
+                    saving -> Text(
+                        "正在记…",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = InkSoft,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
                     )
-                    Spacer(Modifier.width(12.dp))
-                    when {
-                        saving -> Text(
-                            "正在存…",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = InkSoft,
-                        )
 
-                        savedFlash -> Text(
-                            "已保存",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = Vermilion,
-                        )
+                    saveError != null -> Notice(
+                        "没记下 · " + saveError.orEmpty(),
+                        Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        actionLabel = "重试",
+                        onAction = { requestSave() },
+                    )
 
-                        dirty -> Text(
-                            "有改动未保存",
-                            style = MaterialTheme.typography.labelSmall,
-                            color = InkSoft,
-                        )
-                    }
+                    dirty -> Unit
+
+                    justCleared -> Text(
+                        "这天的素材已清掉",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = InkSoft,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                    )
+
+                    savedAt != null -> Text(
+                        "已记下 $savedAt",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = InkSoft,
+                        modifier = Modifier.padding(horizontal = 20.dp, vertical = 10.dp),
+                    )
                 }
             }
         }
     }
 }
 
-// 三段共用同一副骨架：无衬线小节标题 + 右侧朱色带入动作 + 多行正文 + 输入线。
+// 三段共用同一副骨架：无衬线小节标题 + 右侧朱色抄入动作 + 多行正文 + 输入线。
+// 提示比正文低一级：13/20 无衬线，不与 17/30 的衬线正文抢注意力。
 @Composable
 private fun DailySection(
     label: String,
@@ -368,6 +415,7 @@ private fun DailySection(
     actionEnabled: Boolean = true,
     onAction: () -> Unit = {},
 ) {
+    val titleStyle = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, lineHeight = 21.sp)
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
@@ -375,7 +423,7 @@ private fun DailySection(
                 .padding(start = 20.dp, end = 12.dp, top = 18.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            Text(label, style = MaterialTheme.typography.labelLarge, color = Ink)
+            Text(label, style = titleStyle, color = Ink)
             Spacer(Modifier.weight(1f))
             if (actionLabel != null) {
                 TextAction(
@@ -394,12 +442,13 @@ private fun DailySection(
             minLines = 3,
             maxLines = 8,
             textStyle = MaterialTheme.typography.bodyLarge,
+            placeholderStyle = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 20.dp),
         )
     }
 }
 
-// 今天不写相对词；补记才用「昨天 / 前两天 / N 天前」把距离说在前头。
+// 今天不写相对词；补记才用「昨天 / 前天 / N 天前」把距离说在前头。
 private fun relativeDay(day: String, today: String): String? {
     val d = parseDay(day) ?: return null
     val t = parseDay(today) ?: return null
@@ -407,12 +456,12 @@ private fun relativeDay(day: String, today: String): String? {
     return when {
         diff <= 0L -> null
         diff == 1L -> "昨天"
-        diff == 2L -> "前两天"
+        diff == 2L -> "前天"
         else -> "$diff 天前"
     }
 }
 
-// 带入只补还没出现的行，不覆盖已经写下的字；抄完即断链，之后改待办不回头改日报。
+// 抄入只补还没出现的行，不覆盖已经写下的字；抄完即断链，之后改待办不回头改日报。
 private fun mergeLines(existing: String, incoming: List<String>): String {
     val have = existing.lineSequence()
         .map { it.trim() }

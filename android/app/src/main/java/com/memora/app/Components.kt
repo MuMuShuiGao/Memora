@@ -91,6 +91,8 @@ fun UnderlineField(
     onSubmit: () -> Unit = {},
     visualTransformation: VisualTransformation = VisualTransformation.None,
     textStyle: TextStyle = MaterialTheme.typography.bodyLarge,
+    // 提示默认跟正文同权；日报这类写字屏要把它降一级，只做空表单时的引子。
+    placeholderStyle: TextStyle = textStyle,
     focusRequester: FocusRequester? = null,
 ) {
     val interactions = remember { MutableInteractionSource() }
@@ -123,7 +125,7 @@ fun UnderlineField(
                     if (value.isEmpty() && placeholder.isNotEmpty()) {
                         Text(
                             placeholder,
-                            style = textStyle,
+                            style = placeholderStyle,
                             color = InkSoft.copy(alpha = 0.6f),
                             maxLines = if (singleLine) 1 else 2,
                         )

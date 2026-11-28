@@ -72,6 +72,38 @@ func TestSameInstantDifferentZoneDifferentPeriod(t *testing.T) {
 	}
 }
 
+func TestDayAfterAndDaysBetween(t *testing.T) {
+	cases := []struct {
+		day  string
+		next string
+	}{
+		{"2026-11-28", "2026-11-29"},
+		{"2026-11-30", "2026-12-01"},
+		{"2026-12-31", "2027-01-01"},
+		{"2028-02-28", "2028-02-29"},
+		{"2028-02-29", "2028-03-01"},
+	}
+	for _, c := range cases {
+		got, err := DayAfter(c.day)
+		if err != nil || got != c.next {
+			t.Errorf("DayAfter(%s) = %s, %v, 期望 %s", c.day, got, err, c.next)
+		}
+	}
+	if _, err := DayAfter("2026-2-03"); err == nil {
+		t.Error("非法日期应报错")
+	}
+
+	if got := DaysBetween("2026-11-23", "2026-11-29"); got != 7 {
+		t.Errorf("DaysBetween 一周 = %d, 期望 7", got)
+	}
+	if got := DaysBetween("2025-01-01", "2026-01-01"); got != 366 {
+		t.Errorf("DaysBetween 一年另含端点 = %d, 期望 366", got)
+	}
+	if got := DaysBetween("2026-11-25", "2026-11-24"); got != 0 {
+		t.Errorf("from 晚于 to 应得 0, 实得 %d", got)
+	}
+}
+
 func TestWeekRange(t *testing.T) {
 	start, end, err := WeekRange("2026-12-28", plus8)
 	if err != nil {

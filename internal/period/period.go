@@ -43,6 +43,30 @@ func IsDayID(s string) bool {
 	return err == nil && formatDate(t) == s
 }
 
+// DayAfter 返回 dayID 的下一个自然日。日报区间接口的 to 是含端点的，
+// 折成 store 的半开区间右端要用它；跨月、跨年、闰日都由 AddDate 处理。
+func DayAfter(dayID string) (string, error) {
+	t, err := parseDate(dayID, time.UTC)
+	if err != nil {
+		return "", err
+	}
+	return formatDate(t.AddDate(0, 0, 1)), nil
+}
+
+// DaysBetween 返回 from 到 to（含两端）的自然日天数。区间接口用它卡
+// "一次最多取 366 天"；两端不合法或 from 晚于 to 时返回 0。
+func DaysBetween(fromID, toID string) int {
+	from, err := parseDate(fromID, time.UTC)
+	if err != nil {
+		return 0
+	}
+	to, err := parseDate(toID, time.UTC)
+	if err != nil || to.Before(from) {
+		return 0
+	}
+	return int(to.Sub(from).Hours()/24) + 1
+}
+
 // WeekRange 把 WeekStartID 的结果还原成 [周一 00:00, 下周一 00:00) 的半开区间。
 // 用半开而不是 23:59:59，是为了不让最后一秒内的毫秒级记录漏掉。
 func WeekRange(startID string, loc *time.Location) (start, end time.Time, err error) {

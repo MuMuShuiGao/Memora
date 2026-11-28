@@ -54,6 +54,7 @@ func TestDailyPutGetRoundTrip(t *testing.T) {
 
 func TestDailyValidation(t *testing.T) {
 	h := newHarness(t)
+	h.api.now = func() time.Time { return time.Date(2026, time.November, 25, 21, 0, 0, 0, testTZ) }
 
 	for _, day := range []string{"2026-11-31", "2026-2-03", "today"} {
 		res, body := h.do(t, "PUT", "/v1/dailies/"+day, `{"priorities":"x"}`, true)
@@ -83,9 +84,88 @@ func TestDailyValidation(t *testing.T) {
 	}
 }
 
+// 区间接口只回有素材的日期，today 取服务端时区，日历据此藏未来入口（ADR-0032）。
+func TestDailiesRange(t *testing.T) {
+	h := newHarness(t)
+	h.api.now = func() time.Time { return time.Date(2026, time.November, 25, 21, 0, 0, 0, testTZ) }
+
+	for _, day := range []string{"2026-11-20", "2026-11-23", "2026-11-24"} {
+		res, body := h.do(t, "PUT", "/v1/dailies/"+day, `{"priorities":"x"}`, true)
+		if res.StatusCode != http.StatusOK {
+			t.Fatalf("准备 %s = %d %s", day, res.StatusCode, body)
+		}
+	}
+	// 区间内的全空行不算“这天有日报”，不该出现在结果里。
+	if res, body := h.do(t, "PUT", "/v1/dailies/2026-11-21", `{"priorities":"  ","done":"","risk":""}`, true); res.StatusCode != http.StatusOK {
+		t.Fatalf("准备全空 = %d %s", res.StatusCode, body)
+	}
+
+	var got struct {
+		Days  []string `json:"days"`
+		Today string   `json:"today"`
+		Count int      `json:"count"`
+	}
+	res, body := h.do(t, "GET", "/v1/dailies?from=2026-11-20&to=2026-11-24", "", true)
+	if res.StatusCode != http.StatusOK {
+		t.Fatalf("区间 = %d %s", res.StatusCode, body)
+	}
+	if err := json.Unmarshal([]byte(body), &got); err != nil {
+		t.Fatalf("解析区间: %v\n%s", err, body)
+	}
+	want := []string{"2026-11-20", "2026-11-23", "2026-11-24"}
+	if len(got.Days) != len(want) || got.Count != len(want) {
+		t.Fatalf("区间日 = %+v, 期望 %v 且 count=3", got, want)
+	}
+	for i := range want {
+		if got.Days[i] != want[i] {
+			t.Errorf("区间日[%d] = %s, 期望 %s（升序）", i, got.Days[i], want[i])
+		}
+	}
+	if got.Today != "2026-11-25" {
+		t.Errorf("today = %s, 期望服务端日 2026-11-25", got.Today)
+	}
+
+	// 边界都含端点：正好 366 天可查，367 天拒绝。
+	if res, body := h.do(t, "GET", "/v1/dailies?from=2025-01-01&to=2026-01-01", "", true); res.StatusCode != http.StatusOK {
+		t.Errorf("366 天 = %d %s, 期望 200", res.StatusCode, body)
+	}
+	for _, path := range []string{
+		"/v1/dailies?from=2025-01-01&to=2026-01-02",
+		"/v1/dailies?from=2026-11-24&to=2026-11-20",
+		"/v1/dailies?from=2026-11-31&to=2026-12-01",
+		"/v1/dailies?from=2026-11-20",
+	} {
+		res, body := h.do(t, "GET", path, "", true)
+		if res.StatusCode != http.StatusBadRequest || !strings.Contains(body, "bad_request") {
+			t.Errorf("%s = %d %s, 期望 400 bad_request", path, res.StatusCode, body)
+		}
+	}
+}
+
+func TestDailyPutRejectsFuture(t *testing.T) {
+	h := newHarness(t)
+	h.api.now = func() time.Time { return time.Date(2026, time.November, 25, 21, 0, 0, 0, testTZ) }
+
+	res, body := h.do(t, "PUT", "/v1/dailies/2026-11-26", `{"priorities":"明天再写"}`, true)
+	if res.StatusCode != http.StatusBadRequest || !strings.Contains(body, "bad_request") {
+		t.Fatalf("写未来 = %d %s, 期望 400 bad_request", res.StatusCode, body)
+	}
+	if strings.Contains(body, "明天再写") {
+		t.Errorf("400 响应不该回显业务数据: %s", body)
+	}
+
+	// 今天本身允许；昨天补记也允许。
+	for _, day := range []string{"2026-11-25", "2026-11-20"} {
+		if res, body := h.do(t, "PUT", "/v1/dailies/"+day, `{"priorities":"x"}`, true); res.StatusCode != http.StatusOK {
+			t.Errorf("写 %s = %d %s, 期望 200", day, res.StatusCode, body)
+		}
+	}
+}
+
 func TestDailiesRequirePassphrase(t *testing.T) {
 	h := newHarness(t)
 	for _, req := range [][2]string{
+		{"GET", "/v1/dailies?from=2026-11-01&to=2026-11-30"},
 		{"GET", "/v1/dailies/2026-11-25"},
 		{"PUT", "/v1/dailies/2026-11-25"},
 	} {

@@ -96,6 +96,15 @@ data class Daily(
     val risk: String = "",
 )
 
+// 日历区间查询（ADR-0032）：只回有素材的日期；today 是服务端今天，
+// 用来判断未来日不显示日报入口，不再单独请求 periods/now。
+@Serializable
+data class DailyDays(
+    val days: List<String> = emptyList(),
+    val today: String = "",
+    val count: Int = 0,
+)
+
 // 更新通道（ADR-0015）：versionCode 是唯一的判据，服务端没有已发布版本时这个类根本不出现。
 // size 由服务端 stat 出来，不是发布时手填的，所以"约多少 MB"不会和真实文件对不上。
 @Serializable

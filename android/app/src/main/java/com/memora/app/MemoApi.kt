@@ -137,6 +137,10 @@ class MemoApi(private val baseUrl: String) {
             if (e.kind == ApiError.Kind.NotFound) null else throw e
         }
 
+    // 日历一次取一个网格范围里有日报的日期，避免一天一个请求（ADR-0032）。
+    suspend fun listDailyDays(from: String, to: String): DailyDays =
+        get("/v1/dailies" + query("from" to from, "to" to to))
+
     suspend fun putDaily(day: String, priorities: String, done: String, risk: String): Daily =
         sendBody("PUT", "/v1/dailies/$day", DailyWriteRequest(priorities, done, risk))
 

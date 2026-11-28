@@ -2,6 +2,7 @@ package com.memora.app
 
 import java.time.Instant
 import java.time.LocalDate
+import java.time.LocalTime
 import java.time.OffsetDateTime
 import java.time.ZoneId
 import java.time.YearMonth
@@ -30,6 +31,9 @@ fun formatInstant(iso: String): String = parse(iso)?.format(TIMESTAMP) ?: iso
 fun formatDay(iso: String): String = parse(iso)?.format(DAY) ?: iso
 
 fun formatTime(iso: String): String = parse(iso)?.format(TIME) ?: ""
+
+// 自动保存状态行上的「已记下 HH:mm」用手机当前时刻，只给人看，不参与任何归属。
+fun clockNow(): String = LocalTime.now().format(TIME)
 
 // 完成时刻落在手机本地哪一天。只服务日报的「带入当天完成」，
 // 不拿它推周期归属——那是服务端算好的（ADR-0031）。

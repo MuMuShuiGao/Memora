@@ -1,9 +1,9 @@
 # 设计：记录、待办与报表的数据、接口与传输
 
 > 状态：生效中
-> 摘要：六张表的字段与归属口径（待办可挂阶段、日报手写进素材、读书不进报表）、二十四个接口的请求响应形状（业务二十二 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
-> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)、[0025](../decisions/0025-backup-snapshot-and-offsite-pull.md)、[0026](../decisions/0026-manual-offsite-pull.md)、[0027](../decisions/0027-completion-takeaway.md)、[0029](../decisions/0029-reading-list.md)、[0030](../decisions/0030-task-stages-as-report-points.md)、[0031](../decisions/0031-handwritten-daily-as-report-material.md)。
-> 更新：2026-11-28（新增 §1 `dailies` 表与 §5 两个日报接口，日报按日期进周报月报第四路素材，按 ADR-0031；同日新增 §1 `task_stages` 表与 §5 三个阶段接口，阶段完成进报表素材，按 ADR-0030；同日新增 §1 `books` 表与 §5 四个读书接口，读书不进周报月报素材，按 ADR-0029；此前 2026-11-27 新增 §8 备份与恢复按 ADR-0025、盘外副本改手动按 ADR-0026，按 ADR-0021 给 `tasks` 加 `due_on`，按 ADR-0027 给待办加完成心得 `takeaway`）
+> 摘要：六张表的字段与归属口径（待办可挂阶段、日报手写进素材、读书不进报表）、二十五个接口的请求响应形状（业务二十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度
+> 依据：[ADR-0001](../decisions/0001-server-owned-data-on-lan.md)、[0002](../decisions/0002-single-user-passphrase.md)、[0004](../decisions/0004-manual-and-scheduled-report.md)、[0006](../decisions/0006-go-single-binary-server.md)、[0007](../decisions/0007-sqlite-over-postgres.md)、[0008](../decisions/0008-native-kotlin-client.md)、[0009](../decisions/0009-public-ip-selfsigned-https-access.md)、[0014](../decisions/0014-todo-tasks-with-priority.md)、[0015](../decisions/0015-self-hosted-apk-release-channel.md)、[0020](../decisions/0020-inline-task-edit.md)、[0021](../decisions/0021-calendar-dated-tasks.md)、[0025](../decisions/0025-backup-snapshot-and-offsite-pull.md)、[0026](../decisions/0026-manual-offsite-pull.md)、[0027](../decisions/0027-completion-takeaway.md)、[0029](../decisions/0029-reading-list.md)、[0030](../decisions/0030-task-stages-as-report-points.md)、[0031](../decisions/0031-handwritten-daily-as-report-material.md)、[0032](../decisions/0032-daily-autosave-and-calendar-lookup.md)。
+> 更新：2026-11-28（同日再补 §5 日报区间查询，并给 `PUT /v1/dailies/{day}` 加「不写未来」校验，接口增至二十五个，按 ADR-0032；同日新增 §1 `dailies` 表与 §5 两个日报接口，日报按日期进周报月报第四路素材，按 ADR-0031；同日新增 §1 `task_stages` 表与 §5 三个阶段接口，阶段完成进报表素材，按 ADR-0030；同日新增 §1 `books` 表与 §5 四个读书接口，读书不进周报月报素材，按 ADR-0029；此前 2026-11-27 新增 §8 备份与恢复按 ADR-0025、盘外副本改手动按 ADR-0026，按 ADR-0021 给 `tasks` 加 `due_on`，按 ADR-0027 给待办加完成心得 `takeaway`）
 
 标 ①②③ 的三处（归属冗余列、自签证书 2 年、`reports.status` 列）已由需求方于 2026-11-24 确认采纳。
 
@@ -177,8 +177,9 @@ SQLite 单文件，WAL 模式，路径来自配置项（ADR-0007）。驱动用 
 | `POST /v1/books` | 新建 | 请求 `{title, author?, finished_month?}`；书名必填 ≤100 码点，作者 ≤100 码点；`finished_month` 缺省为服务端本地时区的当月，给了必须是带零填充的 `YYYY-MM`。响应含 `id` 与两个时间戳 |
 | `PATCH /v1/books/{id}` | 改 | 接受 `{title}` / `{author}` / `{finished_month}` / `{takeaway}` 任意组合，只改发过来的字段；书名与年月不能清空，作者与心得传空串等于清掉；心得 ≤200 码点（ADR-0029）。字段全缺 → 400 |
 | `DELETE /v1/books/{id}` | 删除 | 幂等，已删除返回 404 |
+| `GET /v1/dailies?from=&to=` | 列有日报的日期 | `from`、`to` 必填，均为 `YYYY-MM-DD`，`from <= to`，区间最多 366 天；格式不合法、`from > to` 或超过 366 天 → 400 `bad_request`。只回三段不全是空的 `entry_day`，响应 `{days, today, count}`；`today` 是服务端本地时区的今天，日历用它判断未来日不显示日报入口。一次取一个网格范围，避免一天一个 GET |
 | `GET /v1/dailies/{day}` | 取某天的日报 | `day` 是 `YYYY-MM-DD`；没有写过返回 404 `code:"not_found"`，客户端按“这天还没写”显示空表，不算错误 |
-| `PUT /v1/dailies/{day}` | 写/改某天的日报 | 请求 `{priorities, done, risk}`，三段都是全量覆盖、可空、每段 ≤2000 码点；`day` 必须是合法自然日。没有这天的行则新建，已有则覆盖三节与 `updated_at`。三节全空等于清掉，行可以保留但不再进素材。响应回整条日报 |
+| `PUT /v1/dailies/{day}` | 写/改某天的日报 | 请求 `{priorities, done, risk}`，三段都是全量覆盖、可空、每段 ≤2000 码点；`day` 必须是合法自然日且不晚于服务端本地时区的今天，晚于今天 → 400 `bad_request`。没有这天的行则新建，已有则覆盖三节与 `updated_at`。三节全空等于清掉，行可以保留但不再进素材。响应回整条日报 |
 | `GET /v1/app/release` | 有没有新版可装 | 读 `<MEMORA_RELEASE_DIR>/release.json`，回 `{version_code, version_name, notes, size}`；`size` 由服务端 stat `app.apk` 得到，不是发布时手填的。没配目录或文件不在 → 404 `not_released`；清单在而包不在（发了一半）→ 500 `release_bad` |
 | `GET /v1/app/release/file` | 拉 APK 本体 | `application/vnd.android.package-archive`，走 `http.ServeContent`，因此带 `Accept-Ranges`；这条响应单独把 HTTP/2 单流写期限放宽到十分钟，避免慢网在一分钟被 `RST_STREAM` 掐断（[ADR-0022](../decisions/0022-download-write-deadline.md)）。文件缺失同样 404 `not_released`。服务端支持续传，客户端目前断了从头重下——10 MB 量级下那段偏移状态机不值（见 [android-client.md](android-client.md) §边界与异常） |
 

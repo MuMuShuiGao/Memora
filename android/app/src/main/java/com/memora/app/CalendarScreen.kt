@@ -11,7 +11,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -43,14 +45,22 @@ import java.time.YearMonth
 /**
  * 日历屏。它不是第二份数据，是同一批待办按 due_on 分天（ADR-0021）；
  * 和待办页一样，每次进屏都重拉 GET /v1/tasks，客户端不留跨页缓存。
+ * 日报只在格子上点一枚墨点、在选中日给一行入口，编辑仍回日报屏（ADR-0032）。
  */
 @Composable
-fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
+fun CalendarScreen(
+    api: MemoApi,
+    onUnauthorized: () -> Unit,
+    onOpenDaily: (String) -> Unit,
+) {
     val scope = rememberCoroutineScope()
     val todayDate = today()
     var selectedDay by rememberSaveable { mutableStateOf(todayDate.toString()) }
     val selected = parseDay(selectedDay) ?: todayDate
     val month = YearMonth.from(selected)
+    val first = month.atDay(1)
+    val gridStart = first.minusDays((first.dayOfWeek.value - 1).toLong())
+    val cells = (0 until 42).map { gridStart.plusDays(it.toLong()) }
 
     var tasks by remember { mutableStateOf<List<Task>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
@@ -63,6 +73,12 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     var reload by remember { mutableStateOf(0) }
     var draft by rememberSaveable { mutableStateOf("") }
     val addEnabled = !busy && togglingIds.isEmpty()
+
+    // 日报日期点单独加载：失败只影响墨点与日报行，待办清单照常可用。
+    var dailyDays by remember { mutableStateOf<Set<String>>(emptySet()) }
+    var dailyToday by remember { mutableStateOf("") }
+    var dailyError by remember { mutableStateOf<String?>(null) }
+    var dailyReload by remember { mutableStateOf(0) }
 
     LaunchedEffect(reload) {
         loading = true
@@ -79,6 +95,23 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
             }
         } finally {
             loading = false
+        }
+    }
+
+    // 进屏与换月都按当前 42 格一次取回；选中日在同月内移动不发请求。
+    LaunchedEffect(gridStart, dailyReload) {
+        dailyError = null
+        try {
+            val got = api.listDailyDays(gridStart.toString(), gridStart.plusDays(41).toString())
+            dailyDays = got.days.toSet()
+            dailyToday = got.today
+        } catch (e: ApiError) {
+            if (e.kind == ApiError.Kind.Unauthorized) {
+                onUnauthorized()
+            } else {
+                dailyDays = emptySet()
+                dailyError = describe(e)
+            }
         }
     }
 
@@ -169,9 +202,11 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     val byDay = remember(tasks) { tasks.groupBy { it.dueOn } }
     val selectedTasks = byDay[selected.toString()].orEmpty()
     val selectedDone = selectedTasks.count { it.done }
-    val first = month.atDay(1)
-    val gridStart = first.minusDays((first.dayOfWeek.value - 1).toLong())
-    val cells = (0 until 42).map { gridStart.plusDays(it.toLong()) }
+    val dailyBoundary = parseDay(dailyToday)
+    val dailyKnown = dailyToday.isNotEmpty() && dailyError == null
+    // 未来的日子不显示日报入口；日历里只跳转，不编辑日报。
+    val dailyEntryVisible = dailyKnown && dailyBoundary != null && !selected.isAfter(dailyBoundary)
+    val selectedHasDaily = selected.toString() in dailyDays
     val listScroll = rememberScrollState()
     LaunchedEffect(selectedDay) { listScroll.scrollTo(0) }
 
@@ -216,6 +251,7 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                             selected = selected,
                             todayDate = todayDate,
                             tasks = byDay[date.toString()].orEmpty(),
+                            hasDaily = date.toString() in dailyDays,
                             modifier = Modifier.weight(1f),
                             onClick = { pick(date) },
                         )
@@ -243,6 +279,29 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
             )
         }
 
+        if (dailyEntryVisible) {
+            Row(
+                Modifier.fillMaxWidth().padding(horizontal = 20.dp, vertical = 2.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(
+                    if (selectedHasDaily) "日报 · 已记下" else "日报 · 还没写",
+                    style = MaterialTheme.typography.labelMedium,
+                    color = InkSoft,
+                )
+                Spacer(Modifier.weight(1f))
+                TextAction(
+                    when {
+                        selectedHasDaily -> "翻到这天"
+                        selected == todayDate -> "去写"
+                        else -> "补记"
+                    },
+                    onClick = { onOpenDaily(selected.toString()) },
+                    color = Vermilion,
+                )
+            }
+        }
+
         notice?.let {
             Notice(it, Modifier.padding(horizontal = 20.dp, vertical = 6.dp))
         }
@@ -252,6 +311,14 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
                 Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
                 actionLabel = "重试",
                 onAction = { reload++ },
+            )
+        }
+        dailyError?.let {
+            Notice(
+                "日报标记没读出来 · 重试",
+                Modifier.padding(horizontal = 20.dp, vertical = 6.dp),
+                actionLabel = "重试",
+                onAction = { dailyReload++ },
             )
         }
 
@@ -333,7 +400,7 @@ fun CalendarScreen(api: MemoApi, onUnauthorized: () -> Unit) {
     }
 }
 
-// 格高是死的：日期下面只放一枚计数徽标，当天几条就是几，不再画短横。
+// 格高至少 48dp，系统字号放大时向下长而不裁切；右上角那枚墨点只说“这天有日报”。
 @Composable
 private fun DayCell(
     date: LocalDate,
@@ -341,6 +408,7 @@ private fun DayCell(
     selected: LocalDate,
     todayDate: LocalDate,
     tasks: List<Task>,
+    hasDaily: Boolean,
     modifier: Modifier = Modifier,
     onClick: () -> Unit,
 ) {
@@ -367,22 +435,28 @@ private fun DayCell(
         allDone -> InkSoft
         else -> Paper
     }
-    val weekStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 8.sp, lineHeight = 8.sp)
+    val weekStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 9.sp, lineHeight = 11.sp)
     val badgeStyle = MaterialTheme.typography.labelSmall.copy(fontSize = 10.sp, lineHeight = 11.sp)
     val subColor = if (isSelected) Paper.copy(alpha = 0.85f) else InkSoft
+    val dailyDot = when {
+        isSelected -> Paper
+        !inMonth -> Ink.copy(alpha = 0.4f)
+        else -> Ink
+    }
 
     Box(
         modifier
-            .height(48.dp)
+            .heightIn(min = 48.dp)
             .padding(1.dp)
             .background(if (isSelected) Vermilion else Color.Transparent)
             // 今天没选中时不靠颜色深浅区分：朱色数字加 1dp 朱框，和选中是两种形状。
             .then(if (isToday && !isSelected) Modifier.border(1.dp, Vermilion) else Modifier)
             .clickable(onClickLabel = "选中这一天", onClick = onClick)
             .padding(horizontal = 3.dp, vertical = 2.dp),
+        contentAlignment = Alignment.TopCenter,
     ) {
         Column(
-            Modifier.fillMaxSize(),
+            Modifier.fillMaxWidth(),
             horizontalAlignment = Alignment.CenterHorizontally,
         ) {
             Text(
@@ -404,6 +478,15 @@ private fun DayCell(
                     Text("${tasks.size}", style = badgeStyle, color = badgeInk)
                 }
             }
+        }
+        if (hasDaily) {
+            Box(
+                Modifier
+                    .align(Alignment.TopEnd)
+                    .padding(top = 1.dp, end = 1.dp)
+                    .size(3.dp)
+                    .background(dailyDot),
+            )
         }
     }
 }

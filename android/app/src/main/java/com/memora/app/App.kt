@@ -114,6 +114,8 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
     var section by rememberSaveable { mutableStateOf(SECTION_TASKS) }
     var editing by remember { mutableStateOf<Editing?>(null) }
     var editingBook by remember { mutableStateOf<Book?>(null) }
+    // 日历点日报入口时带过来的一天，日报屏读完就清掉（ADR-0032）。
+    var dailyJumpDay by rememberSaveable { mutableStateOf<String?>(null) }
     // "正在看更新页"不进 savedInstanceState：装完包进程会被系统换掉，
     // 重启后回到正常首屏，那句"刚装好"由更新页自己的状态带出来。
     var showUpdate by remember { mutableStateOf(false) }
@@ -190,9 +192,21 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
                         editing = Editing(note)
                     }
 
-                    SECTION_DAILY -> DailyScreen(api, onForgetPassphrase)
+                    SECTION_DAILY -> DailyScreen(
+                        api,
+                        onForgetPassphrase,
+                        jumpDay = dailyJumpDay,
+                        onJumpConsumed = { dailyJumpDay = null },
+                    )
 
-                    SECTION_CALENDAR -> CalendarScreen(api, onForgetPassphrase)
+                    SECTION_CALENDAR -> CalendarScreen(
+                        api,
+                        onForgetPassphrase,
+                        onOpenDaily = { day ->
+                            dailyJumpDay = day
+                            section = SECTION_DAILY
+                        },
+                    )
 
                     SECTION_BOOKS -> BooksScreen(api, onForgetPassphrase) { picked ->
                         editingBook = picked
