@@ -12,6 +12,15 @@ data class ReleaseNote(
 
 val APP_RELEASES = listOf(
     ReleaseNote(
+        version = "0.13",
+        date = "2026-11-28",
+        changes = listOf(
+            "新增关于页：版本、检查更新与历次更新记录都在这一页",
+            "抽屉底部多了「关于」入口，右边写着当前版本",
+            "从关于去更新，返回仍回关于",
+        ),
+    ),
+    ReleaseNote(
         version = "0.12",
         date = "2026-11-28",
         changes = listOf(
