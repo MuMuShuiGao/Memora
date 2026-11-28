@@ -12,6 +12,15 @@ data class ReleaseNote(
 
 val APP_RELEASES = listOf(
     ReleaseNote(
+        version = "0.14",
+        date = "2026-11-28",
+        changes = listOf(
+            "日报的正文与标题重新分了主次，不再是一整页大字",
+            "空表单的提示和光标落在同一行，每段先留两行",
+            "「从待办抄五条」「抄今天勾掉的」改叫「记上五条待办」「记上今天做完的」",
+        ),
+    ),
+    ReleaseNote(
         version = "0.13",
         date = "2026-11-28",
         changes = listOf(
