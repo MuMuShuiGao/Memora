@@ -51,6 +51,7 @@
 | [decisions/0031-handwritten-daily-as-report-material.md](decisions/0031-handwritten-daily-as-report-material.md) | 生效中 | `dailies` 一天一条、本人手写优先级/完成/卡点三段；按日期归属周月，作为周报月报可信度最高的第四路素材；不生成日报快照、不新建优先级对象、不提醒不发送 |
 | [decisions/0032-daily-autosave-and-calendar-lookup.md](decisions/0032-daily-autosave-and-calendar-lookup.md) | 生效中 | 日报改为停顿 1.5 秒自动保存、翻页与跳转前补存，文案换成写给自己的话；日历加日报墨点与当日入口，不新建日历屏；服务端补「不写未来」校验；字阶只做两屏局部调整 |
 | [decisions/0033-about-screen-and-changelog.md](decisions/0033-about-screen-and-changelog.md) | 生效中 | 抽屉底部加「关于」入口，独立关于屏显示版本号、检查更新与写死在包里的更新记录；不加服务端接口，发版时补一条 |
+| [decisions/0034-daily-type-scale-and-empty-state.md](decisions/0034-daily-type-scale-and-empty-state.md) | 生效中 | 日报正文降到 16/27、小节标题改为 14/20 半粗无衬线、空表单只留两行并把提示贴到第一行；两处抄入改叫「记上」，全局 `Theme.kt` 不动，仅多行框空态跟着对齐 |
 | [design/README.md](design/README.md) | 生效中 | 定论设计的收录边界 |
 | [design/memo-and-report.md](design/memo-and-report.md) | 生效中 | 六张表的字段与归属口径（待办可挂阶段、日报手写进素材、读书不进报表）、二十五个接口的请求响应形状（业务二十三 + 更新通道二）、自签 HTTPS 与口令校验的落点、进程内补跑式调度 |
 | [design/android-client.md](design/android-client.md) | 生效中 | 手机端十一屏划分（抽屉六区块加底部关于入口，含日报、日历、读书与待办阶段）、本地只存哪五样、二十五个接口怎么调、每种错误显示成什么、地址与证书怎么随构建环境切换 |

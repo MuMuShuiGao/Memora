@@ -97,6 +97,8 @@ fun UnderlineField(
 ) {
     val interactions = remember { MutableInteractionSource() }
     val focused by interactions.collectIsFocusedAsState()
+    // 多行框的提示贴第一行：居中会在 minLines > 1 时漂到中间，与首行光标错位（ADR-0034）。
+    val placeholderAtTop = !singleLine && minLines > 1
 
     Column(modifier) {
         if (label != null) {
@@ -121,7 +123,9 @@ fun UnderlineField(
                 .padding(top = 8.dp)
                 .then(if (focusRequester != null) Modifier.focusRequester(focusRequester) else Modifier),
             decorationBox = { inner ->
-                Box(contentAlignment = Alignment.CenterStart) {
+                Box(
+                    contentAlignment = if (placeholderAtTop) Alignment.TopStart else Alignment.CenterStart,
+                ) {
                     if (value.isEmpty() && placeholder.isNotEmpty()) {
                         Text(
                             placeholder,

@@ -23,6 +23,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import kotlinx.coroutines.delay
@@ -153,7 +154,7 @@ fun DailyScreen(
                 loadError = "服务端没有给出今天"
                 return@LaunchedEffect
             }
-            // 抄入动作要用最新顺序，每次进屏都重拉；拿到手就换掉上一份。
+            // 记入动作要用最新顺序，每次进屏都重拉；拿到手就换掉上一份。
             tasks = api.listTasks().tasks
             // 从日历跳过来时先把原来那天的字补存，失败就留在原页，不静默丢字。
             if (loadedFor != target && isDirty() && !flushNow()) {
@@ -341,18 +342,18 @@ fun DailyScreen(
                         onValueChange = {
                             priorities = clampCodePoints(it, MemoApi.MAX_DAILY_CHARS)
                         },
-                        actionLabel = if (canBringTasks) "从待办抄五条" else null,
+                        actionLabel = if (canBringTasks) "记上五条待办" else null,
                         actionEnabled = !loading,
                         onAction = { bringTasks() },
                     )
                     DailySection(
                         label = "做成了什么",
-                        hint = "写结果就行，不用交代过程",
+                        hint = "写结果就好",
                         value = doneText,
                         onValueChange = {
                             doneText = clampCodePoints(it, MemoApi.MAX_DAILY_CHARS)
                         },
-                        actionLabel = if (canBringDone) "抄今天勾掉的" else null,
+                        actionLabel = if (canBringDone) "记上今天做完的" else null,
                         actionEnabled = !loading,
                         onAction = { bringDone() },
                     )
@@ -403,8 +404,9 @@ fun DailyScreen(
     }
 }
 
-// 三段共用同一副骨架：无衬线小节标题 + 右侧朱色抄入动作 + 多行正文 + 输入线。
-// 提示比正文低一级：13/20 无衬线，不与 17/30 的衬线正文抢注意力。
+// 三段共用同一副骨架：半粗无衬线小节标题 + 右侧朱色记入动作 + 多行正文 + 输入线。
+// 标题是器械、正文是手稿：标题靠字重压住，不靠字号（ADR-0034）。提示仍低一级，
+// 只做空表单时的引子。
 @Composable
 private fun DailySection(
     label: String,
@@ -415,7 +417,12 @@ private fun DailySection(
     actionEnabled: Boolean = true,
     onAction: () -> Unit = {},
 ) {
-    val titleStyle = MaterialTheme.typography.labelLarge.copy(fontSize = 15.sp, lineHeight = 21.sp)
+    val titleStyle = MaterialTheme.typography.labelLarge.copy(
+        fontSize = 14.sp,
+        lineHeight = 20.sp,
+        fontWeight = FontWeight.SemiBold,
+    )
+    val bodyStyle = MaterialTheme.typography.bodyLarge.copy(fontSize = 16.sp, lineHeight = 27.sp)
     Column(Modifier.fillMaxWidth()) {
         Row(
             Modifier
@@ -439,9 +446,9 @@ private fun DailySection(
             onValueChange = onValueChange,
             placeholder = hint,
             singleLine = false,
-            minLines = 3,
+            minLines = 2,
             maxLines = 8,
-            textStyle = MaterialTheme.typography.bodyLarge,
+            textStyle = bodyStyle,
             placeholderStyle = MaterialTheme.typography.bodySmall,
             modifier = Modifier.padding(horizontal = 20.dp),
         )
@@ -461,7 +468,7 @@ private fun relativeDay(day: String, today: String): String? {
     }
 }
 
-// 抄入只补还没出现的行，不覆盖已经写下的字；抄完即断链，之后改待办不回头改日报。
+// 记入只补还没出现的行，不覆盖已经写下的字；记完即断链，之后改待办不回头改日报。
 private fun mergeLines(existing: String, incoming: List<String>): String {
     val have = existing.lineSequence()
         .map { it.trim() }
