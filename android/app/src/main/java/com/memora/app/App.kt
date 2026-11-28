@@ -119,6 +119,8 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
     // "正在看更新页"不进 savedInstanceState：装完包进程会被系统换掉，
     // 重启后回到正常首屏，那句"刚装好"由更新页自己的状态带出来。
     var showUpdate by remember { mutableStateOf(false) }
+    // 关于页同理，不留到重启以后（ADR-0033）。
+    var showAbout by remember { mutableStateOf(false) }
     // 切区块、进编辑页都会把当前屏整块拆掉；把 rememberSaveable 的那部分（选中日、
     // 展开状态、没发出去的草稿）按区块存住，回来时不用重新挑一遍（ADR-0028）。
     val sectionStates = rememberSaveableStateHolder()
@@ -148,8 +150,18 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
 
     // checker 挂在这一层，所以下载中切区块再回来，进度不会丢。
     val update = rememberUpdateChecker(api)
+    // 更新页压在关于页上：从关于点「去更新」，返回仍回关于（ADR-0033）。
+    BackHandler(enabled = showUpdate) { showUpdate = false }
     if (showUpdate) {
         UpdatePage(update, onBack = { showUpdate = false })
+        return
+    }
+    if (showAbout) {
+        AboutScreen(
+            update,
+            onBack = { showAbout = false },
+            onOpenUpdate = { showUpdate = true },
+        )
         return
     }
 
@@ -169,6 +181,7 @@ private fun Workspace(api: MemoApi, local: LocalStore, onForgetPassphrase: () ->
                     section = next
                     scope.launch { drawerState.close() }
                 },
+                onAbout = { showAbout = true },
             )
         },
     ) {
@@ -247,8 +260,9 @@ private fun Masthead(sectionLabel: String, onMenu: () -> Unit) {
 }
 
 // 抽屉做得像一页目录：纸色、墨字、当前项压一道朱线，不引导航库（ADR-0010、ADR-0028）。
+// 底部一行「关于」隔开发丝线，右侧淡墨写当前版本，不占区块名额（ADR-0033）。
 @Composable
-private fun MemoraDrawer(current: String, onSelect: (String) -> Unit) {
+private fun MemoraDrawer(current: String, onSelect: (String) -> Unit, onAbout: () -> Unit) {
     ModalDrawerSheet(
         modifier = Modifier.width(280.dp).fillMaxHeight(),
         drawerShape = RectangleShape,
@@ -274,6 +288,25 @@ private fun MemoraDrawer(current: String, onSelect: (String) -> Unit) {
             SECTIONS.forEach { (key, label) ->
                 DrawerItem(label, active = key == current) { onSelect(key) }
             }
+            Spacer(Modifier.weight(1f))
+            Hairline(Modifier.padding(horizontal = 24.dp))
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .height(52.dp)
+                    .clickable(onClick = onAbout)
+                    .padding(horizontal = 24.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("关于", style = MaterialTheme.typography.titleMedium, color = InkSoft)
+                Spacer(Modifier.weight(1f))
+                Text(
+                    "v${BuildConfig.VERSION_NAME}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = InkSoft.copy(alpha = 0.75f),
+                )
+            }
+            Spacer(Modifier.height(16.dp))
         }
     }
 }
